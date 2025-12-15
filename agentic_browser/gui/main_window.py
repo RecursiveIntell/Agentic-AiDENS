@@ -1,11 +1,11 @@
 """
 Main window for Agentic Browser GUI.
 
-Provides the primary application interface.
+Provides the primary application interface with dark theme.
 """
 
 import sys
-import json
+import re
 import subprocess
 from typing import Optional
 from pathlib import Path
@@ -14,10 +14,10 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QTextEdit, QListWidget,
     QListWidgetItem, QStatusBar, QSplitter, QFrame,
-    QMessageBox,
+    QMessageBox, QScrollArea,
 )
 from PySide6.QtCore import Qt, QProcess, Signal, Slot, QTimer
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QColor, QPalette, QTextCursor
 
 from ..settings_store import SettingsStore, get_settings
 from ..providers import Provider, PROVIDER_DISPLAY_NAMES
@@ -25,72 +25,161 @@ from ..providers import Provider, PROVIDER_DISPLAY_NAMES
 from .settings_dialog import SettingsDialog
 
 
-class StepItem(QFrame):
-    """Custom widget for displaying a step in the log."""
-    
-    def __init__(self, step: int, action: str, args: str, risk: str, parent=None):
-        super().__init__(parent)
-        self.step = step
-        self.action = action
-        self.args_str = args
-        self.risk = risk
-        
-        self._setup_ui()
-    
-    def _setup_ui(self):
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-        
-        # Step number
-        step_label = QLabel(f"#{self.step}")
-        step_label.setFixedWidth(35)
-        step_label.setStyleSheet("font-weight: bold; color: #666;")
-        layout.addWidget(step_label)
-        
-        # Action
-        action_label = QLabel(self.action)
-        action_label.setFixedWidth(100)
-        action_label.setStyleSheet("font-weight: bold; color: #0066cc;")
-        layout.addWidget(action_label)
-        
-        # Args summary
-        args_text = self.args_str[:60] + "..." if len(self.args_str) > 60 else self.args_str
-        args_label = QLabel(args_text)
-        args_label.setStyleSheet("color: #444;")
-        layout.addWidget(args_label, 1)
-        
-        # Risk badge
-        risk_colors = {"low": "#28a745", "medium": "#ffc107", "high": "#dc3545"}
-        color = risk_colors.get(self.risk.lower(), "#888")
-        risk_label = QLabel(self.risk.upper())
-        risk_label.setFixedWidth(60)
-        risk_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        risk_label.setStyleSheet(f"background: {color}; color: white; border-radius: 3px; padding: 2px;")
-        layout.addWidget(risk_label)
-        
-        # Status indicator
-        self.status_label = QLabel("⏳")
-        self.status_label.setFixedWidth(25)
-        layout.addWidget(self.status_label)
-    
-    def set_result(self, success: bool, message: str = ""):
-        """Update the step result."""
-        if success:
-            self.status_label.setText("✅")
-            self.status_label.setToolTip(message)
-        else:
-            self.status_label.setText("❌")
-            self.status_label.setToolTip(message)
+# Dark theme colors
+DARK_BG = "#1e1e1e"
+DARK_SURFACE = "#252526"
+DARK_SURFACE_LIGHT = "#2d2d30"
+DARK_BORDER = "#3e3e42"
+DARK_TEXT = "#cccccc"
+DARK_TEXT_DIM = "#808080"
+DARK_ACCENT = "#0e639c"
+DARK_ACCENT_HOVER = "#1177bb"
+DARK_SUCCESS = "#4ec9b0"
+DARK_WARNING = "#dcdcaa"
+DARK_ERROR = "#f14c4c"
+DARK_INFO = "#569cd6"
+
+
+DARK_STYLESHEET = f"""
+    QMainWindow {{
+        background: {DARK_BG};
+    }}
+    QWidget {{
+        background: {DARK_BG};
+        color: {DARK_TEXT};
+        font-family: 'Segoe UI', 'Ubuntu', sans-serif;
+    }}
+    QLabel {{
+        background: transparent;
+        color: {DARK_TEXT};
+    }}
+    QLineEdit {{
+        background: {DARK_SURFACE};
+        border: 1px solid {DARK_BORDER};
+        border-radius: 4px;
+        padding: 8px;
+        color: {DARK_TEXT};
+    }}
+    QLineEdit:focus {{
+        border-color: {DARK_ACCENT};
+    }}
+    QPushButton {{
+        background: {DARK_SURFACE_LIGHT};
+        border: 1px solid {DARK_BORDER};
+        border-radius: 4px;
+        padding: 8px 16px;
+        color: {DARK_TEXT};
+    }}
+    QPushButton:hover {{
+        background: {DARK_BORDER};
+    }}
+    QPushButton:disabled {{
+        background: {DARK_SURFACE};
+        color: {DARK_TEXT_DIM};
+    }}
+    QTextEdit {{
+        background: {DARK_SURFACE};
+        border: 1px solid {DARK_BORDER};
+        border-radius: 4px;
+        color: {DARK_TEXT};
+        font-family: 'Consolas', 'Ubuntu Mono', monospace;
+        font-size: 12px;
+    }}
+    QListWidget {{
+        background: {DARK_SURFACE};
+        border: none;
+        color: {DARK_TEXT};
+    }}
+    QListWidget::item {{
+        padding: 4px;
+    }}
+    QListWidget::item:selected {{
+        background: {DARK_ACCENT};
+    }}
+    QFrame {{
+        background: {DARK_SURFACE};
+        border: 1px solid {DARK_BORDER};
+        border-radius: 4px;
+    }}
+    QStatusBar {{
+        background: {DARK_SURFACE_LIGHT};
+        color: {DARK_TEXT_DIM};
+    }}
+    QSplitter::handle {{
+        background: {DARK_BORDER};
+    }}
+    QGroupBox {{
+        font-weight: bold;
+        border: 1px solid {DARK_BORDER};
+        border-radius: 4px;
+        margin-top: 12px;
+        padding-top: 12px;
+        color: {DARK_TEXT};
+    }}
+    QGroupBox::title {{
+        subcontrol-origin: margin;
+        left: 10px;
+        padding: 0 5px;
+    }}
+    QComboBox {{
+        background: {DARK_SURFACE};
+        border: 1px solid {DARK_BORDER};
+        border-radius: 4px;
+        padding: 6px;
+        color: {DARK_TEXT};
+    }}
+    QComboBox:hover {{
+        border-color: {DARK_ACCENT};
+    }}
+    QComboBox::drop-down {{
+        border: none;
+    }}
+    QComboBox QAbstractItemView {{
+        background: {DARK_SURFACE};
+        border: 1px solid {DARK_BORDER};
+        color: {DARK_TEXT};
+        selection-background-color: {DARK_ACCENT};
+    }}
+    QSpinBox {{
+        background: {DARK_SURFACE};
+        border: 1px solid {DARK_BORDER};
+        border-radius: 4px;
+        padding: 6px;
+        color: {DARK_TEXT};
+    }}
+    QCheckBox {{
+        color: {DARK_TEXT};
+    }}
+    QCheckBox::indicator {{
+        width: 16px;
+        height: 16px;
+    }}
+    QScrollBar:vertical {{
+        background: {DARK_SURFACE};
+        width: 12px;
+        border-radius: 6px;
+    }}
+    QScrollBar::handle:vertical {{
+        background: {DARK_BORDER};
+        border-radius: 6px;
+        min-height: 20px;
+    }}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+        height: 0px;
+    }}
+    QDialog {{
+        background: {DARK_BG};
+    }}
+"""
 
 
 class MainWindow(QMainWindow):
-    """Main application window."""
+    """Main application window with dark theme."""
     
     def __init__(self):
         super().__init__()
         self.store = SettingsStore()
         self._process: Optional[QProcess] = None
-        self._step_items: dict[int, StepItem] = {}
         self._current_step = 0
         self._output_buffer = ""
         
@@ -101,7 +190,7 @@ class MainWindow(QMainWindow):
     def _setup_ui(self):
         """Set up the main window UI."""
         self.setWindowTitle("Agentic Browser")
-        self.setMinimumSize(900, 700)
+        self.setMinimumSize(1000, 750)
         
         # Load window size from settings
         settings = self.store.settings
@@ -122,97 +211,128 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(goal_label)
         
         self.goal_edit = QLineEdit()
-        self.goal_edit.setPlaceholderText("Enter your goal, e.g., 'Open example.com and tell me the title'")
-        self.goal_edit.setStyleSheet("font-size: 14px; padding: 8px;")
+        self.goal_edit.setPlaceholderText("Enter your goal, e.g., 'Search Google for Python tutorials'")
+        self.goal_edit.setStyleSheet("font-size: 14px; padding: 10px;")
         header_layout.addWidget(self.goal_edit, 1)
         
         self.run_btn = QPushButton("▶ Run")
-        self.run_btn.setStyleSheet("""
-            QPushButton {
-                background: #28a745;
-                color: white;
+        self.run_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {DARK_SUCCESS};
+                color: #1e1e1e;
                 font-weight: bold;
                 font-size: 14px;
-                padding: 8px 20px;
+                padding: 10px 24px;
                 border-radius: 4px;
-            }
-            QPushButton:hover {
-                background: #218838;
-            }
-            QPushButton:disabled {
-                background: #6c757d;
-            }
+                border: none;
+            }}
+            QPushButton:hover {{
+                background: #5fd9c0;
+            }}
+            QPushButton:disabled {{
+                background: {DARK_SURFACE_LIGHT};
+                color: {DARK_TEXT_DIM};
+            }}
         """)
         header_layout.addWidget(self.run_btn)
         
         self.stop_btn = QPushButton("⬛ Stop")
         self.stop_btn.setEnabled(False)
-        self.stop_btn.setStyleSheet("""
-            QPushButton {
-                background: #dc3545;
+        self.stop_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {DARK_ERROR};
                 color: white;
                 font-weight: bold;
                 font-size: 14px;
-                padding: 8px 20px;
+                padding: 10px 24px;
                 border-radius: 4px;
-            }
-            QPushButton:hover {
-                background: #c82333;
-            }
-            QPushButton:disabled {
-                background: #6c757d;
-            }
+                border: none;
+            }}
+            QPushButton:hover {{
+                background: #f77;
+            }}
+            QPushButton:disabled {{
+                background: {DARK_SURFACE_LIGHT};
+                color: {DARK_TEXT_DIM};
+            }}
         """)
         header_layout.addWidget(self.stop_btn)
         
         self.settings_btn = QPushButton("⚙ Settings")
-        self.settings_btn.setStyleSheet("""
-            QPushButton {
+        self.settings_btn.setStyleSheet(f"""
+            QPushButton {{
                 font-size: 14px;
-                padding: 8px 16px;
-            }
+                padding: 10px 20px;
+                background: {DARK_SURFACE_LIGHT};
+            }}
         """)
         header_layout.addWidget(self.settings_btn)
         
         layout.addLayout(header_layout)
         
-        # Splitter for log and result
+        # Main content splitter
         splitter = QSplitter(Qt.Orientation.Vertical)
         
-        # Step log
-        log_frame = QFrame()
-        log_frame.setStyleSheet("background: white; border: 1px solid #ddd; border-radius: 4px;")
-        log_layout = QVBoxLayout(log_frame)
-        log_layout.setContentsMargins(0, 0, 0, 0)
+        # Output log (main area)
+        output_frame = QFrame()
+        output_layout = QVBoxLayout(output_frame)
+        output_layout.setContentsMargins(0, 0, 0, 0)
+        output_layout.setSpacing(0)
         
-        log_header = QLabel("Step Log")
-        log_header.setStyleSheet("font-weight: bold; padding: 8px; background: #f8f9fa; border-bottom: 1px solid #ddd;")
-        log_layout.addWidget(log_header)
+        output_header = QLabel("  📋 Agent Output")
+        output_header.setStyleSheet(f"""
+            font-weight: bold; 
+            padding: 10px; 
+            background: {DARK_SURFACE_LIGHT}; 
+            border-bottom: 1px solid {DARK_BORDER};
+            border-radius: 4px 4px 0 0;
+        """)
+        output_layout.addWidget(output_header)
         
-        self.step_list = QListWidget()
-        self.step_list.setStyleSheet("border: none;")
-        log_layout.addWidget(self.step_list)
+        self.output_log = QTextEdit()
+        self.output_log.setReadOnly(True)
+        self.output_log.setStyleSheet(f"""
+            border: none;
+            border-radius: 0 0 4px 4px;
+            padding: 12px;
+            font-size: 13px;
+            line-height: 1.5;
+        """)
+        self.output_log.setPlaceholderText("Agent output will appear here...\n\nTip: The agent will control a browser window. Keep it visible to see what's happening.")
+        output_layout.addWidget(self.output_log)
         
-        splitter.addWidget(log_frame)
+        splitter.addWidget(output_frame)
         
-        # Result area
-        result_frame = QFrame()
-        result_frame.setStyleSheet("background: white; border: 1px solid #ddd; border-radius: 4px;")
-        result_layout = QVBoxLayout(result_frame)
-        result_layout.setContentsMargins(0, 0, 0, 0)
+        # Status/Summary area
+        status_frame = QFrame()
+        status_layout = QVBoxLayout(status_frame)
+        status_layout.setContentsMargins(0, 0, 0, 0)
+        status_layout.setSpacing(0)
         
-        result_header = QLabel("Output")
-        result_header.setStyleSheet("font-weight: bold; padding: 8px; background: #f8f9fa; border-bottom: 1px solid #ddd;")
-        result_layout.addWidget(result_header)
+        status_header = QLabel("  📊 Status")
+        status_header.setStyleSheet(f"""
+            font-weight: bold; 
+            padding: 10px; 
+            background: {DARK_SURFACE_LIGHT}; 
+            border-bottom: 1px solid {DARK_BORDER};
+            border-radius: 4px 4px 0 0;
+        """)
+        status_layout.addWidget(status_header)
         
-        self.result_text = QTextEdit()
-        self.result_text.setReadOnly(True)
-        self.result_text.setStyleSheet("border: none; font-size: 13px; padding: 8px; font-family: monospace;")
-        self.result_text.setPlaceholderText("Output will appear here...")
-        result_layout.addWidget(self.result_text)
+        self.status_text = QTextEdit()
+        self.status_text.setReadOnly(True)
+        self.status_text.setStyleSheet(f"""
+            border: none;
+            border-radius: 0 0 4px 4px;
+            padding: 12px;
+            font-size: 13px;
+        """)
+        self.status_text.setPlaceholderText("Status and results will appear here...")
+        self.status_text.setMaximumHeight(150)
+        status_layout.addWidget(self.status_text)
         
-        splitter.addWidget(result_frame)
-        splitter.setSizes([400, 200])
+        splitter.addWidget(status_frame)
+        splitter.setSizes([500, 150])
         
         layout.addWidget(splitter, 1)
         
@@ -223,7 +343,7 @@ class MainWindow(QMainWindow):
         self.provider_label = QLabel()
         self.status_bar.addPermanentWidget(self.provider_label)
         
-        self.step_count_label = QLabel("Steps: 0")
+        self.step_count_label = QLabel("Ready")
         self.status_bar.addPermanentWidget(self.step_count_label)
     
     def _connect_signals(self):
@@ -244,6 +364,30 @@ class MainWindow(QMainWindow):
         
         model = settings.model or "default"
         self.provider_label.setText(f"Provider: {provider_name} | Model: {model}")
+    
+    def _log(self, message: str, level: str = "info"):
+        """Add a message to the output log with color coding."""
+        colors = {
+            "info": DARK_TEXT,
+            "success": DARK_SUCCESS,
+            "warning": DARK_WARNING,
+            "error": DARK_ERROR,
+            "action": DARK_INFO,
+            "dim": DARK_TEXT_DIM,
+        }
+        color = colors.get(level, DARK_TEXT)
+        
+        cursor = self.output_log.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        
+        # Insert colored text
+        format = cursor.charFormat()
+        format.setForeground(QColor(color))
+        cursor.setCharFormat(format)
+        cursor.insertText(message + "\n")
+        
+        self.output_log.setTextCursor(cursor)
+        self.output_log.ensureCursorVisible()
     
     def _on_run(self):
         """Start the agent as a subprocess."""
@@ -270,18 +414,26 @@ class MainWindow(QMainWindow):
             return
         
         # Clear previous run
-        self.step_list.clear()
-        self._step_items.clear()
+        self.output_log.clear()
+        self.status_text.clear()
         self._current_step = 0
-        self.result_text.clear()
-        self.step_count_label.setText("Steps: 0")
         self._output_buffer = ""
+        
+        # Log start
+        self._log(f"🎯 Goal: {goal}", "info")
+        self._log(f"🔌 Provider: {provider_config.display_name}", "dim")
+        self._log(f"🤖 Model: {provider_config.effective_model}", "dim")
+        self._log(f"📁 Profile: {settings.profile_name}", "dim")
+        self._log("─" * 50, "dim")
+        self._log("🚀 Starting agent...", "info")
+        self._log("", "dim")
         
         # Update UI state
         self.run_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.goal_edit.setEnabled(False)
         self.settings_btn.setEnabled(False)
+        self.step_count_label.setText("Running...")
         
         # Build command
         cmd = [
@@ -291,7 +443,7 @@ class MainWindow(QMainWindow):
             "--max-steps", str(settings.max_steps),
             "--model-endpoint", provider_config.endpoint,
             "--model", provider_config.effective_model,
-            "--auto-approve",  # Always auto-approve in GUI mode for now
+            "--auto-approve",  # Always auto-approve in GUI mode
         ]
         
         if settings.headless:
@@ -301,6 +453,11 @@ class MainWindow(QMainWindow):
         env = dict(subprocess.os.environ)
         if provider_config.api_key:
             env["AGENTIC_BROWSER_API_KEY"] = provider_config.api_key
+        
+        # Log the command for debugging
+        self._log(f"[DEBUG] Command: agentic-browser run \"{goal}\"", "dim")
+        self._log(f"[DEBUG] Endpoint: {provider_config.endpoint}", "dim")
+        self._log("", "dim")
         
         # Start process
         self._process = QProcess(self)
@@ -313,7 +470,7 @@ class MainWindow(QMainWindow):
         # Start the command
         self._process.start(cmd[0], cmd[1:])
         
-        self.status_bar.showMessage("Agent running...")
+        self.status_bar.showMessage("Agent running... Keep the browser window visible!")
     
     def _create_env(self, env_dict: dict) -> "QProcessEnvironment":
         """Create QProcessEnvironment from dict."""
@@ -326,6 +483,8 @@ class MainWindow(QMainWindow):
     def _on_stop(self):
         """Stop the agent process."""
         if self._process:
+            self._log("", "dim")
+            self._log("⏹️ Stopping agent...", "warning")
             self._process.terminate()
             # Give it a moment to terminate gracefully
             QTimer.singleShot(2000, self._force_kill)
@@ -334,6 +493,7 @@ class MainWindow(QMainWindow):
     def _force_kill(self):
         """Force kill the process if still running."""
         if self._process and self._process.state() != QProcess.ProcessState.NotRunning:
+            self._log("⚠️ Force killing agent process", "error")
             self._process.kill()
     
     def _on_stdout(self):
@@ -344,7 +504,7 @@ class MainWindow(QMainWindow):
         data = self._process.readAllStandardOutput().data().decode("utf-8", errors="replace")
         self._output_buffer += data
         
-        # Parse lines for step information
+        # Parse lines
         lines = self._output_buffer.split("\n")
         self._output_buffer = lines[-1]  # Keep incomplete line
         
@@ -357,53 +517,55 @@ class MainWindow(QMainWindow):
             return
         
         data = self._process.readAllStandardError().data().decode("utf-8", errors="replace")
-        self.result_text.append(f"[stderr] {data}")
+        for line in data.strip().split("\n"):
+            if line.strip():
+                self._log(f"[stderr] {line}", "error")
     
     def _parse_output_line(self, line: str):
         """Parse a line of output to extract step info."""
-        line = line.strip()
-        if not line:
+        # Strip ANSI codes for parsing
+        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+        clean_line = ansi_escape.sub('', line).strip()
+        
+        if not clean_line:
             return
         
-        # Append to result text
-        self.result_text.append(line)
-        self.result_text.ensureCursorVisible()
+        # Determine log level based on content
+        level = "info"
         
-        # Try to detect step patterns from rich output
-        # Look for patterns like "Step 1:" or action names
-        if "Step" in line and ":" in line:
-            try:
-                # Extract step number
-                import re
-                match = re.search(r"Step\s*(\d+)", line)
-                if match:
-                    self._current_step = int(match.group(1))
-                    self.step_count_label.setText(f"Steps: {self._current_step}")
-            except:
-                pass
+        # Skip rich formatting lines
+        if clean_line.startswith("─") or clean_line.startswith("━"):
+            return
+        if clean_line.startswith("│") or clean_line.startswith("┃"):
+            clean_line = clean_line[1:].strip()
         
-        # Look for action patterns
-        action_patterns = ["goto", "click", "type", "press", "scroll", "extract", "done"]
-        line_lower = line.lower()
-        for action in action_patterns:
-            if f"action: {action}" in line_lower or f"→ {action}" in line_lower:
-                self._add_step_item(self._current_step or 1, action, line, "low")
-                break
-    
-    def _add_step_item(self, step: int, action: str, details: str, risk: str):
-        """Add a step to the log."""
-        if step in self._step_items:
-            return  # Already added
-            
-        item = StepItem(step, action, details, risk)
-        list_item = QListWidgetItem()
-        list_item.setSizeHint(item.sizeHint())
+        # Detect patterns
+        lower = clean_line.lower()
         
-        self.step_list.addItem(list_item)
-        self.step_list.setItemWidget(list_item, item)
-        self.step_list.scrollToBottom()
+        if "error" in lower or "failed" in lower or "fatal" in lower:
+            level = "error"
+        elif "success" in lower or "completed" in lower or "✓" in clean_line:
+            level = "success"
+        elif "warning" in lower or "denied" in lower:
+            level = "warning"
+        elif "step" in lower or "action:" in lower:
+            level = "action"
+            # Update step count
+            match = re.search(r"step\s*(\d+)", lower)
+            if match:
+                self._current_step = int(match.group(1))
+                self.step_count_label.setText(f"Step {self._current_step}")
+        elif "goal" in lower:
+            level = "info"
+        elif clean_line.startswith("[") and "]" in clean_line:
+            level = "dim"
         
-        self._step_items[step] = item
+        # Log the line
+        self._log(clean_line, level)
+        
+        # Check for final answer
+        if "final answer" in lower or "goal accomplished" in lower:
+            self.status_text.append(f"✅ {clean_line}")
     
     def _on_finished(self, exit_code: int, exit_status):
         """Handle process finished."""
@@ -413,16 +575,29 @@ class MainWindow(QMainWindow):
         self.goal_edit.setEnabled(True)
         self.settings_btn.setEnabled(True)
         
+        self._log("", "dim")
         if exit_code == 0:
-            self.status_bar.showMessage("Agent completed successfully!", 5000)
+            self._log("✅ Agent completed successfully!", "success")
+            self.status_bar.showMessage("Agent completed!", 5000)
+            self.step_count_label.setText("Done")
         else:
-            self.status_bar.showMessage(f"Agent finished with exit code {exit_code}", 5000)
+            self._log(f"❌ Agent exited with code {exit_code}", "error")
+            self.status_bar.showMessage(f"Agent exited with code {exit_code}", 5000)
+            self.step_count_label.setText("Failed")
         
         self._process = None
     
     def _on_error(self, error):
         """Handle process error."""
-        self.result_text.append(f"\n[Error] Process error: {error}")
+        error_msgs = {
+            QProcess.ProcessError.FailedToStart: "Failed to start - is agentic-browser installed?",
+            QProcess.ProcessError.Crashed: "Process crashed",
+            QProcess.ProcessError.Timedout: "Process timed out",
+            QProcess.ProcessError.WriteError: "Write error",
+            QProcess.ProcessError.ReadError: "Read error",
+        }
+        msg = error_msgs.get(error, f"Unknown error: {error}")
+        self._log(f"❌ Process error: {msg}", "error")
         self.status_bar.showMessage("Agent error occurred", 5000)
     
     def _on_settings(self):
@@ -455,24 +630,21 @@ def run_gui():
     app.setApplicationName("Agentic Browser")
     app.setStyle("Fusion")
     
-    # Apply styling
-    app.setStyleSheet("""
-        QMainWindow {
-            background: #f5f5f5;
-        }
-        QGroupBox {
-            font-weight: bold;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            margin-top: 12px;
-            padding-top: 12px;
-        }
-        QGroupBox::title {
-            subcontrol-origin: margin;
-            left: 10px;
-            padding: 0 5px;
-        }
-    """)
+    # Apply dark theme
+    app.setStyleSheet(DARK_STYLESHEET)
+    
+    # Set dark palette for native widgets
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window, QColor(DARK_BG))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(DARK_TEXT))
+    palette.setColor(QPalette.ColorRole.Base, QColor(DARK_SURFACE))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(DARK_SURFACE_LIGHT))
+    palette.setColor(QPalette.ColorRole.Text, QColor(DARK_TEXT))
+    palette.setColor(QPalette.ColorRole.Button, QColor(DARK_SURFACE_LIGHT))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(DARK_TEXT))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(DARK_ACCENT))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+    app.setPalette(palette)
     
     window = MainWindow()
     window.show()
