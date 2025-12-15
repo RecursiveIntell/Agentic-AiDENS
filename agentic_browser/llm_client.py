@@ -55,7 +55,7 @@ Your response must follow this exact schema:
   "rationale": "short reason for this action",
   "risk": "low|medium|high",
   "requires_approval": true/false,
-  "final_answer": "only when action=done"
+  "final_answer": "only when action=done - put your complete answer/summary here"
 }
 
 Action argument rules:
@@ -71,26 +71,31 @@ Action argument rules:
 - back/forward: {}
 - done: { "summary_style": "bullets|paragraph" }
 
-IMPORTANT WORKFLOW PATTERNS:
-1. SEARCH: After typing in a search box, you MUST use press with key "Enter" to submit
-   - First: type the search query
-   - Then: press Enter to submit
-2. FORMS: After filling form fields, click the submit button
-3. NEVER repeat the same action twice - always progress to the next step
+CRITICAL WORKFLOW PATTERNS:
+1. SEARCH: After typing in a search box, you MUST press Enter to submit
+2. FORMS: After filling form fields, click the submit button  
+3. NEVER repeat the same action - always progress to the next step
+4. COMPLETION: Once you have the information needed to answer the goal:
+   - Use action="done" IMMEDIATELY
+   - Put your complete answer in "final_answer"
+   - Do NOT keep extracting or navigating - just finish!
+
+WHEN TO USE "done":
+- You have read/extracted the information the user asked for
+- You can answer the user's question from the visible text
+- The task is complete (e.g., clicked a button, filled a form)
+- There's nothing more to do
 
 Selector tips:
 - Use text= selectors for visible text: text="Click Me"
 - Use CSS selectors for elements with IDs/classes
-- If a selector fails, use extract_visible_text and screenshot to understand the page
 
 Risk classification:
 - HIGH: purchases, payments, sending messages, account settings, deleting
 - MEDIUM: logging in, uploading files, granting permissions
 - LOW: navigation, reading, extracting data
 
-Set requires_approval=true for HIGH risk and MEDIUM risk actions.
-
-When the goal is complete, use action="done" with a clear final_answer summarizing what was accomplished."""
+Set requires_approval=true for HIGH risk and MEDIUM risk actions."""
 
     REPAIR_PROMPT = """Your previous response was not valid JSON. 
     
