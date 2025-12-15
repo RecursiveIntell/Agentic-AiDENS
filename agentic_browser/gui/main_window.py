@@ -5,81 +5,34 @@ Provides the primary application interface.
 """
 
 import sys
+import json
+import subprocess
 from typing import Optional
 from pathlib import Path
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QTextEdit, QListWidget,
-    QListWidgetItem, QStatusBar, QToolBar, QSplitter, QFrame,
-    QMessageBox, QProgressBar,
+    QListWidgetItem, QStatusBar, QSplitter, QFrame,
+    QMessageBox,
 )
-from PySide6.QtCore import Qt, QThread, Signal, Slot, QSize
-from PySide6.QtGui import QAction, QFont, QColor, QIcon
+from PySide6.QtCore import Qt, QProcess, Signal, Slot, QTimer
+from PySide6.QtGui import QFont
 
-from ..config import AgentConfig
-from ..agent import BrowserAgent, AgentResult
-from ..safety import RiskLevel
 from ..settings_store import SettingsStore, get_settings
-from ..providers import Provider
+from ..providers import Provider, PROVIDER_DISPLAY_NAMES
 
 from .settings_dialog import SettingsDialog
-from .approval_dialog import ApprovalDialog
-
-
-class AgentWorker(QThread):
-    """Background worker thread for running the agent."""
-    
-    step_started = Signal(int, str, dict, str, str)  # step, action, args, rationale, risk
-    step_completed = Signal(int, bool, str)  # step, success, message
-    approval_needed = Signal(int, str, dict, str, str)  # step, action, args, risk, rationale
-    agent_finished = Signal(bool, str, str)  # success, final_answer, error
-    
-    def __init__(self, config: AgentConfig):
-        super().__init__()
-        self.config = config
-        self._agent: Optional[BrowserAgent] = None
-        self._stop_requested = False
-        self._approval_response = None
-        self._approval_event = None
-    
-    def run(self):
-        """Run the agent in background."""
-        from threading import Event
-        self._approval_event = Event()
-        
-        try:
-            # Create agent with GUI callbacks
-            self._agent = BrowserAgent(self.config)
-            
-            # Override the agent's approval method to use GUI
-            original_run = self._agent._main_loop
-            
-            # We'll use a simpler approach - just run the agent
-            result = self._agent.run()
-            
-            self.agent_finished.emit(
-                result.success,
-                result.final_answer or "",
-                result.error or "",
-            )
-            
-        except Exception as e:
-            self.agent_finished.emit(False, "", str(e))
-    
-    def request_stop(self):
-        """Request the agent to stop."""
-        self._stop_requested = True
 
 
 class StepItem(QFrame):
     """Custom widget for displaying a step in the log."""
     
-    def __init__(self, step: int, action: str, args: dict, risk: str, parent=None):
+    def __init__(self, step: int, action: str, args: str, risk: str, parent=None):
         super().__init__(parent)
         self.step = step
         self.action = action
-        self.args = args
+        self.args_str = args
         self.risk = risk
         
         self._setup_ui()
@@ -101,7 +54,7 @@ class StepItem(QFrame):
         layout.addWidget(action_label)
         
         # Args summary
-        args_text = str(self.args)[:60] + "..." if len(str(self.args)) > 60 else str(self.args)
+        args_text = self.args_str[:60] + "..." if len(self.args_str) > 60 else self.args_str
         args_label = QLabel(args_text)
         args_label.setStyleSheet("color: #444;")
         layout.addWidget(args_label, 1)
@@ -136,8 +89,10 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.store = SettingsStore()
-        self._worker: Optional[AgentWorker] = None
+        self._process: Optional[QProcess] = None
         self._step_items: dict[int, StepItem] = {}
+        self._current_step = 0
+        self._output_buffer = ""
         
         self._setup_ui()
         self._connect_signals()
@@ -246,14 +201,14 @@ class MainWindow(QMainWindow):
         result_layout = QVBoxLayout(result_frame)
         result_layout.setContentsMargins(0, 0, 0, 0)
         
-        result_header = QLabel("Result")
+        result_header = QLabel("Output")
         result_header.setStyleSheet("font-weight: bold; padding: 8px; background: #f8f9fa; border-bottom: 1px solid #ddd;")
         result_layout.addWidget(result_header)
         
         self.result_text = QTextEdit()
         self.result_text.setReadOnly(True)
-        self.result_text.setStyleSheet("border: none; font-size: 13px; padding: 8px;")
-        self.result_text.setPlaceholderText("Results will appear here after the agent completes...")
+        self.result_text.setStyleSheet("border: none; font-size: 13px; padding: 8px; font-family: monospace;")
+        self.result_text.setPlaceholderText("Output will appear here...")
         result_layout.addWidget(self.result_text)
         
         splitter.addWidget(result_frame)
@@ -283,7 +238,6 @@ class MainWindow(QMainWindow):
         settings = self.store.settings
         try:
             provider = Provider(settings.provider)
-            from ..providers import PROVIDER_DISPLAY_NAMES
             provider_name = PROVIDER_DISPLAY_NAMES.get(provider, settings.provider)
         except ValueError:
             provider_name = settings.provider
@@ -292,7 +246,7 @@ class MainWindow(QMainWindow):
         self.provider_label.setText(f"Provider: {provider_name} | Model: {model}")
     
     def _on_run(self):
-        """Start the agent."""
+        """Start the agent as a subprocess."""
         goal = self.goal_edit.text().strip()
         if not goal:
             QMessageBox.warning(self, "No Goal", "Please enter a goal first.")
@@ -318,20 +272,10 @@ class MainWindow(QMainWindow):
         # Clear previous run
         self.step_list.clear()
         self._step_items.clear()
+        self._current_step = 0
         self.result_text.clear()
         self.step_count_label.setText("Steps: 0")
-        
-        # Build config
-        config = AgentConfig(
-            goal=goal,
-            profile_name=settings.profile_name,
-            headless=settings.headless,
-            max_steps=settings.max_steps,
-            auto_approve=settings.auto_approve,
-            model_endpoint=provider_config.endpoint,
-            model=provider_config.effective_model,
-            api_key=provider_config.api_key,
-        )
+        self._output_buffer = ""
         
         # Update UI state
         self.run_btn.setEnabled(False)
@@ -339,31 +283,119 @@ class MainWindow(QMainWindow):
         self.goal_edit.setEnabled(False)
         self.settings_btn.setEnabled(False)
         
-        # Start worker
-        self._worker = AgentWorker(config)
-        self._worker.step_started.connect(self._on_step_started)
-        self._worker.step_completed.connect(self._on_step_completed)
-        self._worker.agent_finished.connect(self._on_agent_finished)
-        self._worker.start()
+        # Build command
+        cmd = [
+            sys.executable, "-m", "agentic_browser", "run",
+            goal,
+            "--profile", settings.profile_name,
+            "--max-steps", str(settings.max_steps),
+            "--model-endpoint", provider_config.endpoint,
+            "--model", provider_config.effective_model,
+            "--auto-approve",  # Always auto-approve in GUI mode for now
+        ]
+        
+        if settings.headless:
+            cmd.append("--headless")
+        
+        # Add API key as environment variable
+        env = dict(subprocess.os.environ)
+        if provider_config.api_key:
+            env["AGENTIC_BROWSER_API_KEY"] = provider_config.api_key
+        
+        # Start process
+        self._process = QProcess(self)
+        self._process.setProcessEnvironment(self._create_env(env))
+        self._process.readyReadStandardOutput.connect(self._on_stdout)
+        self._process.readyReadStandardError.connect(self._on_stderr)
+        self._process.finished.connect(self._on_finished)
+        self._process.errorOccurred.connect(self._on_error)
+        
+        # Start the command
+        self._process.start(cmd[0], cmd[1:])
         
         self.status_bar.showMessage("Agent running...")
     
+    def _create_env(self, env_dict: dict) -> "QProcessEnvironment":
+        """Create QProcessEnvironment from dict."""
+        from PySide6.QtCore import QProcessEnvironment
+        qenv = QProcessEnvironment.systemEnvironment()
+        for key, value in env_dict.items():
+            qenv.insert(key, value)
+        return qenv
+    
     def _on_stop(self):
-        """Stop the agent."""
-        if self._worker:
-            self._worker.request_stop()
+        """Stop the agent process."""
+        if self._process:
+            self._process.terminate()
+            # Give it a moment to terminate gracefully
+            QTimer.singleShot(2000, self._force_kill)
             self.status_bar.showMessage("Stopping agent...")
     
-    def _on_settings(self):
-        """Open settings dialog."""
-        dialog = SettingsDialog(self)
-        if dialog.exec():
-            self._update_status_bar()
+    def _force_kill(self):
+        """Force kill the process if still running."""
+        if self._process and self._process.state() != QProcess.ProcessState.NotRunning:
+            self._process.kill()
     
-    @Slot(int, str, dict, str, str)
-    def _on_step_started(self, step: int, action: str, args: dict, rationale: str, risk: str):
-        """Handle step started."""
-        item = StepItem(step, action, args, risk)
+    def _on_stdout(self):
+        """Handle stdout from the process."""
+        if not self._process:
+            return
+        
+        data = self._process.readAllStandardOutput().data().decode("utf-8", errors="replace")
+        self._output_buffer += data
+        
+        # Parse lines for step information
+        lines = self._output_buffer.split("\n")
+        self._output_buffer = lines[-1]  # Keep incomplete line
+        
+        for line in lines[:-1]:
+            self._parse_output_line(line)
+    
+    def _on_stderr(self):
+        """Handle stderr from the process."""
+        if not self._process:
+            return
+        
+        data = self._process.readAllStandardError().data().decode("utf-8", errors="replace")
+        self.result_text.append(f"[stderr] {data}")
+    
+    def _parse_output_line(self, line: str):
+        """Parse a line of output to extract step info."""
+        line = line.strip()
+        if not line:
+            return
+        
+        # Append to result text
+        self.result_text.append(line)
+        self.result_text.ensureCursorVisible()
+        
+        # Try to detect step patterns from rich output
+        # Look for patterns like "Step 1:" or action names
+        if "Step" in line and ":" in line:
+            try:
+                # Extract step number
+                import re
+                match = re.search(r"Step\s*(\d+)", line)
+                if match:
+                    self._current_step = int(match.group(1))
+                    self.step_count_label.setText(f"Steps: {self._current_step}")
+            except:
+                pass
+        
+        # Look for action patterns
+        action_patterns = ["goto", "click", "type", "press", "scroll", "extract", "done"]
+        line_lower = line.lower()
+        for action in action_patterns:
+            if f"action: {action}" in line_lower or f"→ {action}" in line_lower:
+                self._add_step_item(self._current_step or 1, action, line, "low")
+                break
+    
+    def _add_step_item(self, step: int, action: str, details: str, risk: str):
+        """Add a step to the log."""
+        if step in self._step_items:
+            return  # Already added
+            
+        item = StepItem(step, action, details, risk)
         list_item = QListWidgetItem()
         list_item.setSizeHint(item.sizeHint())
         
@@ -372,33 +404,32 @@ class MainWindow(QMainWindow):
         self.step_list.scrollToBottom()
         
         self._step_items[step] = item
-        self.step_count_label.setText(f"Steps: {step}")
     
-    @Slot(int, bool, str)
-    def _on_step_completed(self, step: int, success: bool, message: str):
-        """Handle step completed."""
-        if step in self._step_items:
-            self._step_items[step].set_result(success, message)
-    
-    @Slot(bool, str, str)
-    def _on_agent_finished(self, success: bool, final_answer: str, error: str):
-        """Handle agent finished."""
+    def _on_finished(self, exit_code: int, exit_status):
+        """Handle process finished."""
         # Reset UI state
         self.run_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.goal_edit.setEnabled(True)
         self.settings_btn.setEnabled(True)
         
-        if success:
-            self.result_text.setStyleSheet("border: none; font-size: 13px; padding: 8px; color: #155724; background: #d4edda;")
-            self.result_text.setText(final_answer)
+        if exit_code == 0:
             self.status_bar.showMessage("Agent completed successfully!", 5000)
         else:
-            self.result_text.setStyleSheet("border: none; font-size: 13px; padding: 8px; color: #721c24; background: #f8d7da;")
-            self.result_text.setText(error or "Agent did not complete the goal.")
-            self.status_bar.showMessage("Agent finished with errors", 5000)
+            self.status_bar.showMessage(f"Agent finished with exit code {exit_code}", 5000)
         
-        self._worker = None
+        self._process = None
+    
+    def _on_error(self, error):
+        """Handle process error."""
+        self.result_text.append(f"\n[Error] Process error: {error}")
+        self.status_bar.showMessage("Agent error occurred", 5000)
+    
+    def _on_settings(self):
+        """Open settings dialog."""
+        dialog = SettingsDialog(self)
+        if dialog.exec():
+            self._update_status_bar()
     
     def closeEvent(self, event):
         """Handle window close."""
@@ -408,10 +439,12 @@ class MainWindow(QMainWindow):
             window_height=self.height(),
         )
         
-        # Stop worker if running
-        if self._worker and self._worker.isRunning():
-            self._worker.request_stop()
-            self._worker.wait(3000)
+        # Stop process if running
+        if self._process and self._process.state() != QProcess.ProcessState.NotRunning:
+            self._process.terminate()
+            self._process.waitForFinished(3000)
+            if self._process.state() != QProcess.ProcessState.NotRunning:
+                self._process.kill()
         
         event.accept()
 
@@ -422,7 +455,7 @@ def run_gui():
     app.setApplicationName("Agentic Browser")
     app.setStyle("Fusion")
     
-    # Apply dark-friendly styling
+    # Apply styling
     app.setStyleSheet("""
         QMainWindow {
             background: #f5f5f5;
