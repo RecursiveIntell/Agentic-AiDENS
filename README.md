@@ -10,7 +10,9 @@ A Linux-first agentic browser runner that controls Chromium via Playwright and e
 - 📝 **Comprehensive Logging**: Saves every step, screenshot, and decision to artifacts
 - 🔄 **Self-Recovery**: Automatically handles errors and retries with alternative approaches
 - 🎯 **Goal-Oriented**: Natural language goals executed through iterative planning
-- 🖥️ **GUI & CLI**: Both graphical and command-line interfaces
+- 🖥️ **Dark Theme GUI**: Modern graphical interface with real-time output
+- 🔗 **Smart Navigation**: Tracks visited URLs to avoid revisiting same pages
+- ⏱️ **Rate Limiting**: Exponential backoff prevents API throttling
 
 ## Installation
 
@@ -46,11 +48,12 @@ python -m playwright install chromium
 agentic-browser gui
 ```
 
-This opens a graphical interface where you can:
+This opens a dark-themed graphical interface where you can:
 - Enter goals in natural language
 - Configure your LLM provider and API key
-- Watch the agent execute steps in real-time
-- Approve or deny risky actions
+- Watch the agent execute steps in real-time with color-coded output
+- See visited URLs and extracted data
+- Monitor step progress in the status bar
 
 ### CLI Mode
 
@@ -58,8 +61,8 @@ This opens a graphical interface where you can:
 # Simple example
 agentic-browser run "Open example.com and tell me the title"
 
-# Search the web
-agentic-browser run "Search the web for Playwright and open the docs"
+# Search the web (DuckDuckGo recommended - avoids CAPTCHAs)
+agentic-browser run "Search DuckDuckGo for Playwright and summarize the results"
 
 # With specific model
 agentic-browser run "Check the weather" --model gpt-4o-mini
@@ -70,9 +73,15 @@ agentic-browser run "Scrape headlines from news.ycombinator.com" --headless
 
 ## GUI Features
 
-### Settings Dialog
+### Dark Theme Interface
 
-The GUI settings dialog allows you to configure:
+The GUI features a modern dark theme with:
+- Color-coded log output (info, success, warning, error, actions)
+- Real-time step counter
+- Debug information (provider, model, endpoint)
+- Status bar with current activity
+
+### Settings Dialog
 
 | Setting | Description |
 |---------|-------------|
@@ -94,7 +103,32 @@ The GUI settings dialog allows you to configure:
 | Anthropic | https://api.anthropic.com/v1 | Yes |
 | Google AI | https://generativelanguage.googleapis.com/v1beta | Yes |
 
-**Model Refresh**: After entering your API key, click "🔄 Refresh" to fetch the list of available models from your provider.
+## Smart Agent Features
+
+### Visited URL Tracking
+
+The agent tracks every URL visited during a session and displays them to the LLM to prevent revisiting the same pages. This is especially useful for tasks like "check the top 5 results."
+
+### Search Workflow
+
+The agent understands search patterns:
+1. Navigate to search engine
+2. Type search query
+3. Press Enter to submit
+4. Extract results or click links
+
+**Tip**: Use DuckDuckGo instead of Google to avoid CAPTCHAs.
+
+### Failure Recovery
+
+When an action fails, the agent:
+- Shows the failed selector in context
+- Suggests alternative approaches (text-based selectors)
+- Advises using `done` if the goal can be answered from visible text
+
+### Rate Limiting
+
+Built-in exponential backoff (2s → 4s → 8s) prevents API rate limit errors with cloud providers.
 
 ## CLI Reference
 
@@ -141,13 +175,6 @@ The agent classifies every action into risk levels:
 ### Low Risk (no approval needed)
 - Navigation, scrolling, reading, screenshots
 
-### Approval Dialog
-
-When approval is required, you'll see the action details and can:
-- **Approve** - Execute the action
-- **Deny** - Ask the agent for an alternative
-- **Edit** - Manually modify the action JSON
-
 ## Artifacts and Logging
 
 Every run creates artifacts at:
@@ -189,9 +216,9 @@ The LLM responds with JSON actions:
 | Action | Arguments | Description |
 |--------|-----------|-------------|
 | `goto` | `url` | Navigate to URL |
-| `click` | `selector`, `timeout_ms` | Click element |
-| `type` | `selector`, `text`, `clear_first` | Type into input |
-| `press` | `key` | Press keyboard key |
+| `click` | `selector`, `timeout_ms` | Click element (with fallback selectors) |
+| `type` | `selector`, `text`, `clear_first` | Type into input (auto-detects search boxes) |
+| `press` | `key` | Press keyboard key (waits for navigation on Enter) |
 | `scroll` | `amount` | Scroll (positive=down) |
 | `wait_for` | `selector`, `timeout_ms` | Wait for element |
 | `extract` | `selector`, `attribute` | Extract element data |
@@ -199,18 +226,7 @@ The LLM responds with JSON actions:
 | `screenshot` | `label` | Capture screenshot |
 | `back` | (none) | Navigate back |
 | `forward` | (none) | Navigate forward |
-| `done` | `summary_style` | Complete task |
-
-## Running Tests
-
-```bash
-# Run all tests
-pytest tests/ -v
-
-# Run specific test file
-pytest tests/test_json_parser.py -v
-pytest tests/test_safety_classifier.py -v
-```
+| `done` | `summary_style` | Complete task with answer |
 
 ## Project Structure
 
@@ -218,8 +234,8 @@ pytest tests/test_safety_classifier.py -v
 agentic_browser/
 ├── cli.py              # Command-line interface
 ├── config.py           # Configuration management
-├── agent.py            # Main agent loop
-├── llm_client.py       # LLM API client with retry logic
+├── agent.py            # Main agent loop with state tracking
+├── llm_client.py       # LLM API client with retry and rate limiting
 ├── tools.py            # Browser action implementations
 ├── safety.py           # Risk classification
 ├── logger.py           # Logging and artifacts
@@ -228,52 +244,10 @@ agentic_browser/
 ├── model_fetcher.py    # Fetch models from provider APIs
 ├── settings_store.py   # Persistent settings storage
 └── gui/
-    ├── main_window.py      # Main application window
+    ├── main_window.py      # Dark theme main window
     ├── settings_dialog.py  # Settings configuration
     └── approval_dialog.py  # Action approval prompts
 ```
-
-## Design Notes
-
-### Adding New Tools
-
-1. Add the action to `tools.py`:
-```python
-def my_new_action(self, param: str) -> ToolResult:
-    """Implement your action."""
-    # ... implementation
-    return ToolResult(success=True, message="Done")
-```
-
-2. Register in the `execute()` dispatch map:
-```python
-method_map = {
-    # ... existing actions
-    "my_new_action": self.my_new_action,
-}
-```
-
-3. Update the LLM system prompt in `llm_client.py` to document the new action.
-
-### Adding New Providers
-
-1. Add to `providers.py`:
-```python
-class Provider(str, Enum):
-    # ... existing
-    NEW_PROVIDER = "new_provider"
-
-PROVIDER_ENDPOINTS[Provider.NEW_PROVIDER] = "https://api.newprovider.com/v1"
-```
-
-2. Add model fetching in `model_fetcher.py` if the provider has a models API.
-
-### Improving Reliability
-
-1. **Better selectors**: Teach the agent about aria-labels, data-testid, etc.
-2. **Context injection**: Add more context to `_get_page_state()` in `agent.py`
-3. **Recovery strategies**: Enhance `get_recovery_action()` with specific patterns
-4. **Loop detection**: Adjust `max_repeat_actions` or implement smarter detection
 
 ## Troubleshooting
 
@@ -285,13 +259,33 @@ PROVIDER_ENDPOINTS[Provider.NEW_PROVIDER] = "https://api.newprovider.com/v1"
 - Run `python -m playwright install chromium`
 - Check for system dependencies: `playwright install-deps chromium`
 
-### Invalid JSON from LLM
-- The agent retries up to 2 times with a repair prompt
-- Try a different/larger model if issues persist
+### "429 Too Many Requests"
+- Built-in rate limiting should handle this automatically
+- If persists, wait a few minutes or use a local LLM (LM Studio)
+
+### Agent loops on same action
+- The agent tracks visited URLs and action history
+- Try a more capable model (GPT-4o, Llama 3.1 8B+)
+- Reduce task complexity
+
+### Google CAPTCHA
+- Use DuckDuckGo instead
+- Or solve the CAPTCHA manually once in the persistent profile
 
 ### GUI doesn't launch
 - Ensure PySide6 is installed: `pip install pyside6`
 - On Wayland, try: `QT_QPA_PLATFORM=xcb agentic-browser gui`
+
+## Recommended Models
+
+For best results, use a capable instruction-following model:
+
+| Provider | Recommended Model | Notes |
+|----------|------------------|-------|
+| LM Studio | Llama 3.1 8B, Qwen 2.5 7B | Free, local, no rate limits |
+| OpenAI | gpt-4o-mini, gpt-4o | Best instruction following |
+| Anthropic | claude-3-sonnet | Good reasoning |
+| Google | gemini-1.5-flash | Fast and capable |
 
 ## License
 
