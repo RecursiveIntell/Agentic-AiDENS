@@ -68,3 +68,19 @@ test-results/
 
 # Project specific
 *.log
+
+# Sensitive data - DO NOT COMMIT
+.env.local
+.env.*.local
+*.env
+secrets.json
+settings.json
+**/api_key*
+**/apikey*
+**/*credentials*
+**/*secret*
+
+# User data directories
+.agentic_browser/
+runs/
+profiles/
