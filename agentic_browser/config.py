@@ -82,6 +82,9 @@ class AgentConfig:
     # Enable Playwright tracing
     enable_tracing: bool = False
     
+    # Use LangChain for conversation memory
+    use_langchain: bool = True  # Default to using LangChain
+    
     @property
     def profile_dir(self) -> Path:
         """Get the path to the browser profile directory."""

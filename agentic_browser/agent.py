@@ -103,8 +103,18 @@ class BrowserAgent:
         self.logger = RunLogger(self.config.goal)
         self.logger.print_header()
         
-        # Initialize LLM client
-        self.llm_client = LLMClient(self.config)
+        # Initialize LLM client (LangChain or standard)
+        if self.config.use_langchain:
+            try:
+                from .langchain_client import LangChainLLMClient
+                self.llm_client = LangChainLLMClient(self.config)
+                self.logger.console.print("[dim]Using LangChain with conversation memory[/dim]")
+            except ImportError:
+                # Fall back to standard client if LangChain not installed
+                self.llm_client = LLMClient(self.config)
+                self.logger.console.print("[dim]LangChain not available, using standard client[/dim]")
+        else:
+            self.llm_client = LLMClient(self.config)
         
         try:
             return self._run_with_browser()
