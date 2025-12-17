@@ -118,11 +118,11 @@ Respond with your action in JSON format.
             merged = {**state["extracted_data"], **extracted_data}
             updates["extracted_data"] = merged
         
-        if visited_url and visited_url not in state["visited_urls"]:
-            updates["visited_urls"] = state["visited_urls"] + [visited_url]
+        if visited_url:
+            updates["visited_urls"] = [visited_url]
         
-        if file_accessed and file_accessed not in state["files_accessed"]:
-            updates["files_accessed"] = state["files_accessed"] + [file_accessed]
+        if file_accessed:
+            updates["files_accessed"] = [file_accessed]
         
         if error:
             updates["error"] = error

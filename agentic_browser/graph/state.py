@@ -32,8 +32,8 @@ class AgentState(TypedDict):
     
     # Collected data
     extracted_data: dict[str, Any]
-    visited_urls: list[str]
-    files_accessed: list[str]
+    visited_urls: Annotated[list[str], operator.add]
+    files_accessed: Annotated[list[str], operator.add]
     
     # Error tracking
     error: str | None
