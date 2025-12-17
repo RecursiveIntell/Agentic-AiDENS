@@ -132,10 +132,10 @@ Examples:
     )
     
     run_parser.add_argument(
-        "--use-graph",
+        "--legacy",
         action="store_true",
         default=False,
-        help="Use new LangGraph multi-agent architecture",
+        help="Use legacy single-agent mode instead of LangGraph",
     )
     
     run_parser.add_argument(
@@ -181,23 +181,24 @@ def run_command(args: argparse.Namespace) -> int:
     )
     
     try:
-        # Check if using new LangGraph architecture
-        if getattr(args, 'use_graph', False):
-            return run_graph_command(args, config, console)
+        # Check if using legacy single-agent mode
+        if getattr(args, 'legacy', False):
+            # Legacy agent mode
+            result = run_agent(config)
+            
+            # Print final status
+            console.print()
+            if result.success:
+                console.print("[bold green]✓ Goal accomplished![/bold green]")
+                return 0
+            else:
+                console.print(f"[bold red]✗ Goal not accomplished[/bold red]")
+                if result.error:
+                    console.print(f"[red]Error: {result.error}[/red]")
+                return 1
         
-        # Legacy agent mode
-        result = run_agent(config)
-        
-        # Print final status
-        console.print()
-        if result.success:
-            console.print("[bold green]✓ Goal accomplished![/bold green]")
-            return 0
-        else:
-            console.print(f"[bold red]✗ Goal not accomplished[/bold red]")
-            if result.error:
-                console.print(f"[red]Error: {result.error}[/red]")
-            return 1
+        # Default: Use new LangGraph multi-agent architecture
+        return run_graph_command(args, config, console)
             
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted by user[/yellow]")
