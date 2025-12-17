@@ -97,7 +97,7 @@ Respond with your action in JSON format.
     def _update_state(
         self,
         state: AgentState,
-        message: AIMessage | None = None,
+        messages: list[BaseMessage] | None = None,  # Changed from single message
         extracted_data: dict | None = None,
         visited_url: str | None = None,
         file_accessed: str | None = None,
@@ -105,28 +105,14 @@ Respond with your action in JSON format.
         task_complete: bool = False,
         final_answer: str | None = None,
     ) -> AgentState:
-        """Create updated state with new information.
-        
-        Args:
-            state: Current state
-            message: New AI message to add
-            extracted_data: Data to merge into extracted_data
-            visited_url: URL to add to visited list
-            file_accessed: File path to add to accessed list
-            error: Error message if any
-            task_complete: Whether task is complete
-            final_answer: Final answer if complete
-            
-        Returns:
-            Updated state dict
-        """
+        """Create updated state with new information."""
         updates: dict[str, Any] = {
             "step_count": state["step_count"] + 1,
             "active_agent": self.AGENT_NAME,
         }
         
-        if message:
-            updates["messages"] = [message]
+        if messages:
+            updates["messages"] = messages
         
         if extracted_data:
             merged = {**state["extracted_data"], **extracted_data}

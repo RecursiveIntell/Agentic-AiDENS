@@ -111,7 +111,7 @@ Your task: {state['goal']}
                 summary = action_data.get("args", {}).get("summary", "Task completed")
                 return self._update_state(
                     state,
-                    message=AIMessage(content=response.content),
+                    messages=[AIMessage(content=response.content)],
                     extracted_data={"browser_findings": summary},
                 )
             
@@ -128,10 +128,17 @@ Your task: {state['goal']}
             if action_data.get("action") == "extract_visible_text" and result.success:
                 key = f"browser_extract_{len(state['extracted_data'])}"
                 extracted = {key: result.data or result.message[:500]}
+                
+            # Create tool output message so agent knows result
+            tool_content = str(result.message) if result.message else "Action successful"
+            if result.data and not extracted:
+                tool_content = str(result.data)[:1000]
+            
+            tool_msg = HumanMessage(content=f"Tool output: {tool_content}")
             
             return self._update_state(
                 state,
-                message=AIMessage(content=response.content),
+                messages=[AIMessage(content=response.content), tool_msg],
                 visited_url=visited,
                 extracted_data=extracted,
                 error=result.message if not result.success else None,

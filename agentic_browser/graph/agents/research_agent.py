@@ -154,7 +154,7 @@ Data collected:
                 summary = action_data.get("args", {}).get("summary", "Research completed")
                 return self._update_state(
                     state,
-                    message=AIMessage(content=response.content),
+                    messages=[AIMessage(content=response.content)],
                     task_complete=True,
                     final_answer=summary,
                     extracted_data={"research_findings": summary},
@@ -177,7 +177,7 @@ Data collected:
             
             return self._update_state(
                 state,
-                message=AIMessage(content=response.content),
+                messages=[AIMessage(content=response.content)],
                 visited_url=visited,
                 extracted_data=extracted,
                 error=result.message if not result.success else None,

@@ -177,6 +177,22 @@ When completing, synthesize ALL gathered data into a useful report:
     
     def _build_messages(self, state: AgentState) -> list:
         """Build messages for supervisor decision."""
+        # Format extracted data
+        data = state['extracted_data']
+        important_keys = [k for k in data.keys() if any(x in k for x in ['analysis', 'findings', 'summary', 'report'])]
+        other_keys = [k for k in data.keys() if k not in important_keys]
+        
+        formatted_data = []
+        for k in important_keys:
+            formatted_data.append(f"--- {k} ---\n{str(data[k])[:2000]}")
+            
+        remaining_chars = 1000
+        if other_keys:
+            other_data = {k: data[k] for k in other_keys}
+            formatted_data.append(f"--- Other Data ---\n{json.dumps(other_data, indent=2)[:remaining_chars]}")
+            
+        data_str = "\n\n".join(formatted_data)
+
         # Summarize current state
         context = f"""
 User's Goal: {state['goal']}
@@ -184,7 +200,7 @@ Current Step: {state['step_count']} / {state['max_steps']}
 Current Domain: {state['current_domain']}
 
 Data Collected:
-{json.dumps(state['extracted_data'], indent=2)[:1000]}
+{data_str}
 
 URLs Visited: {len(state['visited_urls'])}
 Files Accessed: {len(state['files_accessed'])}

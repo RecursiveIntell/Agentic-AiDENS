@@ -124,7 +124,7 @@ TIPS:
                 summary = action_data.get("args", {}).get("summary", "Analysis completed")
                 return self._update_state(
                     state,
-                    message=AIMessage(content=response.content),
+                    messages=[AIMessage(content=response.content)],
                     extracted_data={"code_analysis": summary},
                     # Note: NOT setting task_complete - supervisor handles that
                 )
@@ -139,18 +139,15 @@ TIPS:
             if action_data.get("action") in ("os_read_file", "os_list_dir"):
                 file_accessed = action_data.get("args", {}).get("path")
             
-            extracted = None
-            if result.success:
-                action_name = action_data.get("action", "unknown")
-                key = f"code_{action_name}_{len(state['extracted_data'])}"
-                data = result.data if result.data else result.message
-                extracted = {key: str(data)[:800]}
+            # Use tool output as a message, not extracted_data
+            action_name = action_data.get("action", "unknown")
+            output_content = str(result.data if result.data else result.message)
+            tool_msg = HumanMessage(content=f"Tool '{action_name}' output:\n{output_content[:2000]}")
             
             return self._update_state(
                 state,
-                message=AIMessage(content=response.content),
+                messages=[AIMessage(content=response.content), tool_msg],
                 file_accessed=file_accessed,
-                extracted_data=extracted,
                 error=result.message if not result.success else None,
             )
             

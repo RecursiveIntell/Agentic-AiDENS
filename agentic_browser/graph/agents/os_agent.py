@@ -123,7 +123,7 @@ EXPLORATION STRATEGY:
                 summary = action_data.get("args", {}).get("summary", "Task completed")
                 return self._update_state(
                     state,
-                    message=AIMessage(content=response.content),
+                    messages=[AIMessage(content=response.content)],
                     extracted_data={"os_findings": summary},
                 )
             
@@ -138,17 +138,15 @@ EXPLORATION STRATEGY:
             if action_data.get("action") in ("os_read_file", "os_list_dir"):
                 file_accessed = action_data.get("args", {}).get("path")
             
-            # Store results
-            extracted = None
-            if result.success and result.data:
-                key = f"os_{action_data.get('action')}_{len(state['extracted_data'])}"
-                extracted = {key: str(result.data)[:500]}
+            # Use tool output as a message, not extracted_data
+            action_name = action_data.get("action", "unknown")
+            tool_content = str(result.data) if result.data else result.message
+            tool_msg = HumanMessage(content=f"Tool '{action_name}' output:\n{str(tool_content)[:2000]}")
             
             return self._update_state(
                 state,
-                message=AIMessage(content=response.content),
+                messages=[AIMessage(content=response.content), tool_msg],
                 file_accessed=file_accessed,
-                extracted_data=extracted,
                 error=result.message if not result.success else None,
             )
             
