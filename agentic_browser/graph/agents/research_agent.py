@@ -34,12 +34,11 @@ Available actions:
 - done: { "summary": "your research findings" } - Complete with report
 
 SEARCH WORKFLOW:
-1. Go to https://duckduckgo.com
-2. Type your search query in input[name='q']
-3. Press Enter to search
-4. Extract results to find real URLs
-5. Visit 1-3 actual websites from search results
-6. Synthesize findings into a comprehensive report
+1. Construct search URL: "https://duckduckgo.com/?q=your+query"
+2. Navigate directly to it using "goto"
+3. Extract search results to find real URLs (do not guess!)
+4. Visit 1-3 actual websites from search results
+5. Synthesize findings into a comprehensive report
 
 ADAPTIVE DEPTH:
 - SIMPLE query ("what is X?"): 1 search, 1-2 sites, quick summary
@@ -108,13 +107,22 @@ Respond with JSON:
         # Determine next action hint
         if current_url == 'about:blank' or not current_url or current_url.startswith('about:'):
             action_hint = """
-ACTION REQUIRED: You are on a blank page!
-Your FIRST action MUST be: {"action": "goto", "args": {"url": "https://duckduckgo.com"}}
+ACTION REQUIRED: Start your search immediately!
+Construct a search URL: {"action": "goto", "args": {"url": "https://duckduckgo.com/?q=your+search+query"}}
+Example: {"action": "goto", "args": {"url": "https://duckduckgo.com/?q=cat+apps+like+mine"}}
 """
         elif 'duckduckgo.com' in current_url:
-            action_hint = """
-ACTION REQUIRED: You are on DuckDuckGo.
-Type your search: {"action": "type", "args": {"selector": "input[name='q']", "text": "your search query"}}
+            # We are on search results (or home page)
+            if 'q=' in current_url:
+                action_hint = """
+You are on search results.
+1. Extract the text/links: {"action": "extract_visible_text", "args": {"max_chars": 5000}}
+2. Then visit a promising result: {"action": "goto", "args": {"url": "https://..."}}
+"""
+            else:
+                # Home page without query? Should rare if we used direct link, but fallback:
+                action_hint = """
+Type your search: {"action": "type", "args": {"selector": "input[name='q']", "text": "your query"}}
 Then press Enter: {"action": "press", "args": {"key": "Enter"}}
 """
         elif sources_visited >= 2:
