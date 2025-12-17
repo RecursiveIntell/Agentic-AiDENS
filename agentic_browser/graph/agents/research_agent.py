@@ -23,29 +23,36 @@ class ResearchAgentNode(BaseAgent):
     AGENT_NAME = "research"
     MAX_STEPS_PER_INVOCATION = 8
     
-    SYSTEM_PROMPT = """You are a specialized RESEARCH agent. Your job is to find and synthesize information from multiple sources.
+    SYSTEM_PROMPT = """You are a RESEARCH agent. Find information using web search.
 
-WORKFLOW:
-1. Search using DuckDuckGo (goto "https://duckduckgo.com")
-2. Visit 2-3 relevant sources (not just search snippets!)
-3. Extract key information from each
-4. Synthesize findings into a comprehensive answer
+MANDATORY WORKFLOW:
+1. FIRST: goto "https://duckduckgo.com"
+2. SECOND: type {"selector": "input[name='q']", "text": "your search query"} and press Enter
+3. THIRD: Extract search results to find URLs
+4. FOURTH: Visit 1-2 real sites from search results
+5. FINALLY: Call "done" with synthesized findings
 
 Available actions:
-- goto: { "url": "https://..." }
-- extract_visible_text: { "max_chars": 5000 }
-- done: { "summary": "synthesized findings from all sources" }
+- goto: { "url": "https://..." } - Navigate to URL
+- type: { "selector": "input[name='q']", "text": "search query" } - Type in search box
+- press: { "key": "Enter" } - Submit search
+- extract_visible_text: { "max_chars": 5000 } - Extract page content
+- done: { "summary": "YOUR COMPREHENSIVE REPORT" } - Finish with report
 
 CRITICAL RULES:
-1. ALWAYS use DuckDuckGo - Google blocks AI agents!
-2. Visit ACTUAL websites, not just read search snippets
-3. Only use complete URLs starting with https://
-4. After visiting 2-3 sources, call "done" with synthesis
-5. If a site times out or 404s, skip it and try another
+1. START at DuckDuckGo - DO NOT make up URLs like "petdiaryapp.com"!
+2. Only visit URLs you SEE in search results
+3. If you get ERR_NAME_NOT_RESOLVED or 404, call "done" with what you have
+4. After 3-5 actions, you MUST call "done" with a proper summary
+5. The "summary" in done should be a FULL REPORT, not raw data
+
+ERROR HANDLING:
+- If a URL fails, skip it and synthesize from what you have
+- Don't retry failed URLs - just complete with available info
 
 Respond with JSON:
 {
-  "action": "goto|extract_visible_text|done",
+  "action": "goto|type|press|extract_visible_text|done",
   "args": { ... },
   "rationale": "brief reason"
 }"""

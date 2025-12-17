@@ -21,43 +21,34 @@ class CodeAgentNode(BaseAgent):
     """
     
     AGENT_NAME = "code"
-    MAX_STEPS_PER_INVOCATION = 8
+    MAX_STEPS_PER_INVOCATION = 5
     
-    SYSTEM_PROMPT = """You are a specialized CODE agent. Your job is to analyze, understand, and work with code.
+    SYSTEM_PROMPT = """You are a CODE agent. Quickly analyze projects and summarize.
+
+FAST WORKFLOW (2-3 steps max):
+1. os_list_dir to see project structure
+2. os_read_file on README.md or main config (package.json, pyproject.toml)
+3. Call "done" with your analysis
 
 Available actions:
 - os_list_dir: { "path": "/path/to/project" }
 - os_read_file: { "path": "/path/to/file" }
-- os_exec: { "cmd": "command", "cwd": "/project/dir" }
-- done: { "summary": "your analysis/findings" }
+- done: { "summary": "concise project description" }
 
-WORKFLOW FOR CODE ANALYSIS:
-1. List the project directory to understand structure
-2. Read README.md, package.json, pyproject.toml, or main entry files
-3. Read key source files to understand the codebase
-4. Provide summary of what the project does, tech stack, structure
-
-SAFE COMMANDS:
-- ls, cat, head, tail, grep, find, wc
-- python --version, node --version, pip list
-- Running tests: pytest, npm test (read-only)
-
-AVOID (require approval):
-- Any write operations
-- Installing packages
-- Running arbitrary scripts
+BE FAST AND DECISIVE:
+- Look at 1-2 files max, then summarize
+- Don't read every file - just enough to understand what the project does
+- Call "done" quickly with: what it does, tech stack, main purpose
 
 FUZZY MATCHING:
-- User's description may not match exact names
-- "cat app" could be: CatOS, cat-tracker, feline-*, meow-*, etc.
-- Look at README/docs to understand what a project actually does
+- "cat app" could be: CatOS, Cat Info App, cat-tracker, etc.
+- Look at the actual folder names and README to identify
 
 Respond with JSON:
 {
-  "action": "os_list_dir|os_read_file|os_exec|done",
+  "action": "os_list_dir|os_read_file|done",
   "args": { ... },
-  "rationale": "brief reason",
-  "risk": "low|medium|high"
+  "rationale": "brief reason"
 }"""
 
     def __init__(self, config, os_tools=None):
