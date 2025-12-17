@@ -173,14 +173,16 @@ EXPLORATION STRATEGY:
             
             # Validate action
             if not data.get("action"):
+                # Default to exploration instead of done
                 return {
-                    "action": "done",
-                    "args": {"summary": "Agent error: Failed to generate valid action"}
+                    "action": "os_list_dir",
+                    "args": {"path": "."}
                 }
                 
             return data
         except json.JSONDecodeError:
-            return {"action": "done", "args": {"summary": "Failed to parse JSON response"}}
+            # On parse failure, explore instead of quitting
+            return {"action": "os_list_dir", "args": {"path": "."}}
 
 
 def os_agent_node(state: AgentState) -> AgentState:

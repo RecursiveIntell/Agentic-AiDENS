@@ -281,14 +281,16 @@ Data collected:
             
             # Validate action
             if not data.get("action"):
+                # Default to text extraction instead of done
                 return {
-                    "action": "done",
-                    "args": {"summary": "Agent error: Failed to generate valid action"}
+                    "action": "extract_visible_text",
+                    "args": {"max_chars": 8000}
                 }
                 
             return data
         except json.JSONDecodeError:
-            return {"action": "done", "args": {"summary": "Failed to parse JSON response"}}
+            # On parse failure, extract instead of quitting
+            return {"action": "extract_visible_text", "args": {"max_chars": 8000}}
 
 
 def research_agent_node(state: AgentState) -> AgentState:
