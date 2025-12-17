@@ -68,16 +68,21 @@ When completing, synthesize ALL gathered data into a useful report:
         """
         self.config = config
         
-        # Build LLM kwargs - some models (o1, o3) don't support temperature
+        # Build LLM kwargs - handle model-specific requirements
+        model_lower = (config.model or "").lower()
+        
+        # GPT-5 needs higher token limit - uses tokens for internal reasoning
+        is_gpt5_model = any(x in model_lower for x in ["gpt-5", "gpt5"])
+        max_tokens = 4000 if is_gpt5_model else 500
+        
         llm_kwargs = {
             "base_url": config.model_endpoint,
             "api_key": config.api_key or "not-required",
             "model": config.model,
-            "max_tokens": 500,
+            "max_tokens": max_tokens,
         }
         
-        # Only add temperature for models that support it
-        model_lower = (config.model or "").lower()
+        # Only add temperature for models that support it (not o1/o3/o4)
         is_reasoning_model = any(x in model_lower for x in ["o1", "o3", "o4"])
         if not is_reasoning_model:
             llm_kwargs["temperature"] = 0.1
