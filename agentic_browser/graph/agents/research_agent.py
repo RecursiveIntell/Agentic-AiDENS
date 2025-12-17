@@ -183,9 +183,19 @@ Data collected:
                 key = f"research_source_{sources_visited + 1}"
                 extracted = {key: result.data[:1000] if result.data else result.message[:500]}
             
+            # Create tool output message
+            tool_content = "Action successful."
+            if result.message:
+                tool_content = str(result.message)
+            elif result.data and not extracted:
+                 # If we didn't extract to extracted_data, show it here
+                tool_content = str(result.data)[:1000]
+                
+            tool_msg = HumanMessage(content=f"Tool output: {tool_content}")
+            
             return self._update_state(
                 state,
-                messages=[AIMessage(content=response.content)],
+                messages=[AIMessage(content=response.content), tool_msg],
                 visited_url=visited,
                 extracted_data=extracted,
                 error=result.message if not result.success else None,
