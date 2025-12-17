@@ -4,6 +4,7 @@ Base agent class for specialized agent nodes.
 Provides common functionality for all agent types.
 """
 
+import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -12,6 +13,10 @@ from langchain_openai import ChatOpenAI
 
 from ..state import AgentState
 from ...config import AgentConfig
+
+# Configure debug logging
+logger = logging.getLogger("agentic_browser.agents")
+DEBUG_MODE = True  # Set to False in production
 
 
 class BaseAgent(ABC):

@@ -124,9 +124,21 @@ TIPS:
         
         try:
             response = self.llm.invoke(messages)
+            
+            # DEBUG: Print raw response
+            print(f"\n{'='*60}")
+            print(f"[DEBUG] CodeAgent - Raw LLM Response:")
+            print(f"{'='*60}")
+            print(response.content[:1500] if len(response.content) > 1500 else response.content)
+            print(f"{'='*60}\n")
+            
             action_data = self._parse_action(response.content)
             
+            # DEBUG: Print parsed action
+            print(f"[DEBUG] CodeAgent - Parsed Action: {action_data}")
+            
             if action_data.get("action") == "done":
+                print(f"[DEBUG] CodeAgent - Action is 'done', returning findings")
                 # Store findings but DON'T mark task_complete - let supervisor decide
                 summary = action_data.get("args", {}).get("summary", "Analysis completed")
                 return self._update_state(
