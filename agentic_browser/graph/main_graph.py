@@ -127,13 +127,20 @@ class MultiAgentRunner:
         Returns:
             Final state dict
         """
+        import uuid
+        
         # Create initial state
         initial_state = create_initial_state(goal, max_steps)
         
-        # Run the graph
+        # Run the graph with thread_id for checkpointer
         final_state = self.graph.invoke(
             initial_state,
-            config={"configurable": self.runtime_config},
+            config={
+                "configurable": {
+                    **self.runtime_config,
+                    "thread_id": str(uuid.uuid4()),
+                }
+            },
         )
         
         return final_state
@@ -148,11 +155,18 @@ class MultiAgentRunner:
         Yields:
             State updates as they occur
         """
+        import uuid
+        
         initial_state = create_initial_state(goal, max_steps)
         
         for event in self.graph.stream(
             initial_state,
-            config={"configurable": self.runtime_config},
+            config={
+                "configurable": {
+                    **self.runtime_config,
+                    "thread_id": str(uuid.uuid4()),
+                }
+            },
         ):
             yield event
     
