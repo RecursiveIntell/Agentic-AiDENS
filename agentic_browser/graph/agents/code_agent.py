@@ -44,9 +44,15 @@ For COMPLEX tasks ("analyze architecture"):
   4. Done
 
 CRITICAL RULES:
-1. ALWAYS start with `os_list_dir` on `.` (current dir) - do not guess paths!
-2. Use relative paths ("src/main.py") not absolute unless you are sure.
-3. If a file doesn't exist, check the directory listing again.
+1. ALWAYS start with: { "action": "os_list_dir", "args": { "path": "." } }
+2. PROJECT VALIDATION:
+   - Check if the files in "." match the user's request.
+   - If User asks for "Cat App" but you see "Agentic Browser" code -> WRONG DIRECTORY.
+   - ACTION: Search for it: { "action": "os_exec", "args": { "cmd": "find ~ -iname '*cat*' -type d -maxdepth 4 2>/dev/null" } }
+   - Then listing the CORRECT directory.
+3. Do not guess paths! Use "os_exec find ..." if you are lost.
+4. "os_list_dir" output is in your HISTORY. Do not re-list same dir repeatedly.
+5. Store findings in "code_analysis" key of extracted_data.
 
 FUZZY MATCHING:
 - "cat app" could match: CatOS, Cat Info App, cat-tracker, etc.
