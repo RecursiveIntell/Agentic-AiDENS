@@ -133,13 +133,22 @@ You are on search results.
 1. Extract text: {"action": "extract_visible_text", "args": {"max_chars": 5000}}
 2. Then visit a result: {"action": "goto", "args": {"url": "https://..."}}
 """
+        elif 'duckduckgo.com' not in current_url and current_url != 'about:blank':
+            # Content page logic
+            action_hint = """
+You are on a content page. 
+1. IF NOT EXTRACTED: {"action": "extract_visible_text", "args": {"max_chars": 8000}}
+2. IF EXTRACTED: Visit next result from your search list: {"action": "goto", "args": {"url": "..."}}
+3. OR if finished: {"action": "done", ...}
+"""
+        
         elif sources_visited >= 2:
             action_hint = """
 You have visited enough sources. Synthesize your findings now:
 {"action": "done", "args": {"summary": "## Research Report\\n\\n[Your findings here]"}}
 """
         else:
-            action_hint = "Continue research or call done if you have enough info."
+            action_hint = "Continue research."
         
         task_context = f"""
 RESEARCH TASK: {state['goal']}
