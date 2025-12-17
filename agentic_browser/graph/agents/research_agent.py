@@ -109,12 +109,17 @@ Respond with JSON:
         visited_search = any('duckduckgo.com' in u for u in state['visited_urls'])
         
         if visited_search and ('duckduckgo.com' in current_url or current_url == 'about:blank'):
-            action_hint = """
-CRITICAL: You have already performed a search.
-DO NOT use "goto" to open DuckDuckGo again.
-1. If you see results, "extract_visible_text".
-2. If the page seems blank, it might still have content - try to "extract_visible_text" anyway.
-3. Or "goto" a specific RESULT link (not search engine).
+            if sources_visited == 0:
+                 action_hint = """
+CRITICAL: You have search results but haven't visited any sites yet.
+1. Extract text to find links: {"action": "extract_visible_text", ...}
+2. MUST visit at least 1 result: {"action": "goto", "args": {"url": "https://..."}}
+DO NOT call "done" yet.
+"""
+            else:
+                 action_hint = """
+1. If you need more info, visit another result.
+2. If satisfied, synthesize findings: {"action": "done", ...}
 """
         elif current_url == 'about:blank' or not current_url or current_url.startswith('about:'):
             action_hint = """
