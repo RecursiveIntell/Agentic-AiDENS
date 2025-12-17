@@ -1,37 +1,21 @@
 # Agentic Browser
 
-A Linux-first **dual-domain agent** that controls both your **web browser** (via Playwright) and your **local Linux system** (via shell commands). Uses LLM-powered decision making with safety guardrails.
+A Linux-first **dual-domain agent** that controls both your **web browser** (via Playwright) and your **local Linux system** (via shell commands). Now powered by **LangGraph** for robust multi-agent orchestration.
 
-## 🆕 Dual-Domain Support
+## 🚀 Key Features
 
-The agent now intelligently routes requests between two domains:
+*   **Multi-Agent Architecture**: Built on [LangGraph](https://langchain-ai.github.io/langgraph/), featuring a Supervisor agent that intelligently routes tasks to specialized Browser and OS agents.
+*   **Dual-Domain Control**: Seamlessly switches between web browsing and local system operations.
+*   **Multi-Provider Support**: Works with: 
+    *   **OpenAI** (GPT-4o, o1)
+    *   **Anthropic** (Claude 3.5 Sonnet)
+    *   **Google** (Gemini 1.5 Pro/Flash)
+    *   **LM Studio** (Local LLMs like Llama 3, Qwen 2.5)
+*   **Browser Automation**: Full control via Playwright (navigation, clicking, typing, extraction).
+*   **OS Integration**: Safe execution of shell commands and file operations with risk-based guardrails.
+*   **Modern GUI**: Dark-themed graphical interface for monitoring agent progress.
 
-| Domain | Capabilities | Example Goals |
-|--------|--------------|---------------|
-| **Browser** | Web browsing, form filling, clicking, data extraction | "Search Google for...", "Log into my account" |
-| **OS/Linux** | Shell commands, file operations, system inspection | "Look at my hard drive", "List files in ~/projects" |
-
-The routing is automatic—just describe what you want and the agent figures out whether to use the browser or local system.
-
-## Features
-
-### Browser Domain
-- 🌐 **Browser Automation**: Controls Chromium with persistent profiles
-- 🔗 **Smart Navigation**: Tracks visited URLs to avoid loops
-- 📝 **Data Extraction**: Extracts text, links, and page content
-
-### OS Domain (NEW)
-- 🖥️ **Shell Commands**: Execute `ls`, `df`, `grep`, etc. via `os_exec`
-- 📁 **File Operations**: Read, write, and list files
-- 🛡️ **Safe by Default**: Blocks writes outside `$HOME`, requires approval for dangerous commands
-
-### Both Domains
-- 🤖 **LLM-Powered**: Uses any OpenAI-compatible API (LM Studio, OpenAI, Anthropic, Google AI)
-- 🛡️ **Safety Guardrails**: Risk classification with approval prompts
-- 📝 **Comprehensive Logging**: Saves every step and decision
-- 🖥️ **Dark Theme GUI**: Modern graphical interface
-
-## Installation
+## 📦 Installation
 
 ```bash
 # Clone the repository
@@ -45,168 +29,80 @@ source venv/bin/activate
 # Install the package
 pip install -e ".[dev]"
 
-# Install Playwright Chromium
+# Install Playwright browsers
 python -m playwright install chromium
 ```
 
-## Quick Start
+## ⚡ Quick Start
 
 ### GUI Mode (Recommended)
-
+Launch the graphical interface to interact with the agent visually:
 ```bash
 agentic-browser gui
 ```
 
 ### CLI Mode
-
+Run the agent directly from the terminal:
 ```bash
-# Browser tasks
-agentic-browser run "Search DuckDuckGo for Python tutorials"
+# Browser task
+agentic-browser run "Search DuckDuckGo for LangGraph tutorials"
 
-# OS tasks (auto-detected)
-agentic-browser run "List files in my home directory"
-agentic-browser run "Check disk usage on my system"
+# OS task
+agentic-browser run "List files in my downloads folder"
 
-# Force a specific domain
-agentic-browser run "Check my files" --routing-mode os
+# Complex dual-domain task
+agentic-browser run "Download the latest python logo and save it to my pictures folder"
 ```
 
-## OS Actions
+## 🛠️ Configuration
 
-| Action | Description | Risk |
-|--------|-------------|------|
-| `os_exec` | Execute shell commands | LOW-HIGH |
-| `os_list_dir` | List directory contents | LOW |
-| `os_read_file` | Read file contents | LOW |
-| `os_write_file` | Write/append to files | MEDIUM-HIGH |
+Settings are stored in `~/.agentic_browser/settings.json`.
 
-### Safety Controls
-
-- **HIGH risk** (requires approval + double-confirm): `rm -rf`, `sudo`, `dd`, `mkfs`, writes to `/etc`
-- **MEDIUM risk** (requires approval): File writes, running scripts
-- **LOW risk** (auto-approved): `ls`, `df`, `cat`, `grep`, reading files
-
-### Path Restrictions
-
-By default, file writes are **blocked outside `$HOME`**. System paths are always protected:
-```
-/etc /usr /bin /sbin /boot /var /lib /opt /root
-```
-
-## Browser Actions
-
-| Action | Description |
-|--------|-------------|
-| `goto` | Navigate to URL |
-| `click` | Click element |
-| `type` | Type into input |
-| `press` | Press keyboard key |
-| `scroll` | Scroll page |
-| `extract` | Extract element data |
-| `screenshot` | Capture screenshot |
-| `done` | Complete task |
-
-## Domain Routing
-
-The agent uses heuristic keyword matching with optional LLM fallback:
-
-| User Goal | Routed To | Signal |
-|-----------|-----------|--------|
-| "Search Google for..." | Browser | URL keyword |
-| "List my files" | OS | File keywords |
-| "Check disk usage" | OS | System keywords |
-| "Open https://..." | Browser | URL pattern |
-
-### Routing Modes
-
-- **auto** (default): Automatic routing via keywords
-- **browser**: Force all tasks to browser
-- **os**: Force all tasks to OS
-- **ask**: Prompt before each task
-
-## Configuration
-
-Settings stored at `~/.agentic_browser/settings.json`:
-
-| Setting | Description |
-|---------|-------------|
-| Provider | LM Studio, OpenAI, Anthropic, Google AI |
-| Routing Mode | auto, browser, os, ask |
-| Max Steps | Maximum actions per task |
-| Auto-Approve | Skip approval for medium-risk |
+### CLI Options
+| Flag | Description |
+|------|-------------|
+| `--model-endpoint` | Custom LLM API endpoint URL |
+| `--model` | Model name (e.g., `gpt-4o`, `claude-3-5-sonnet`) |
+| `--headless` | Run browser in headless mode (default: false) |
+| `--auto-approve` | Skip approval prompts for medium-risk actions |
+| `--fresh-profile` | Start with a clean browser profile |
+| `--enable-tracing` | Save Playwright traces for debugging |
+| `--legacy` | Use the old single-agent implementation |
 
 ### Environment Variables
-
 ```bash
-AGENTIC_BROWSER_ENDPOINT  # LLM endpoint
-AGENTIC_BROWSER_MODEL     # Model name
-AGENTIC_BROWSER_API_KEY   # API key
-AGENTIC_OS_ENDPOINT       # Separate OS model endpoint (optional)
+# Provider Configuration
+AGENTIC_BROWSER_PROVIDER # one of: openai, anthropic, google, lm_studio (default)
+
+# API Keys (if not using local models)
+OPENAI_API_KEY
+ANTHROPIC_API_KEY
+GOOGLE_API_KEY
 ```
 
-## Safety Model
+## 🏗️ Architecture
 
-### HIGH Risk (always requires approval)
-- Browser: Purchase buttons, account deletion, sending messages
-- OS: `rm -rf`, `sudo`, `dd`, `chmod -R`, system path writes
+The system uses a graph-based architecture:
 
-### MEDIUM Risk (requires approval unless auto-approve)
-- Browser: Login forms, file uploads
-- OS: File writes, running scripts
+1.  **Supervisor Node**: Analyzes the user's goal and current state to decide which specialist to call next.
+2.  **Browser Agent**: Handles internet-facing tasks using Playwright tools.
+3.  **OS Agent**: Handles local system tasks using shell tools.
+4.  **Safety Layer**: Intercepts actions to enforce permissions and prompt for user approval on risky operations.
 
-### LOW Risk (no approval needed)
-- Browser: Navigation, reading, screenshots
-- OS: `ls`, `df`, `cat`, `grep`, reading files
+## 🛡️ Safety & Permissions
 
-## Artifacts and Logging
+The agent creates a sandbox but operates with your user permissions. To prevent accidents, it classifies actions by risk:
 
-Every run creates artifacts at:
-```
-~/.agentic_browser/runs/<timestamp>_<goal>/
-├── steps.jsonl        # Every step with state and result
-├── screenshots/       # Screenshots at each step
-└── snapshots/         # Page snapshots
-```
+*   **HIGH RISK** (Always asks): `rm`, `sudo`, `dd`, writing to system paths.
+*   **MEDIUM RISK** (Asks unless auto-approve): Writing files to home dir, running scripts.
+*   **LOW RISK** (Allowed): `ls`, `cat`, reading files, web navigation.
 
-## Project Structure
+## 🐛 Troubleshooting
 
-```
-agentic_browser/
-├── agent.py            # Main agent loop (browser + OS routing)
-├── domain_router.py    # Intelligent domain routing
-├── tool_router.py      # Action dispatch to tools
-├── os_tools.py         # OS action implementations
-├── tools.py            # Browser action implementations
-├── safety.py           # Risk classification (browser + OS)
-├── llm_client.py       # LLM client with OS/browser prompts
-├── config.py           # Configuration management
-└── gui/                # Dark theme GUI
-```
+*   **Browser doesn't start**: Ensure you ran `playwright install`.
+*   **Permission errors**: The agent cannot do what your user account cannot do.
+*   **Model errors**: Check your API keys and internet connection. For local models, ensure LM Studio/Ollama is running.
 
-## Troubleshooting
-
-### OS commands return permission errors
-- The agent can only access what your user can access
-- System directories require `sudo` which triggers HIGH risk approval
-
-### Agent loops instead of summarizing
-- Updated prompt now enforces 5-step limit
-- Agent must call `done` after 3-5 commands
-
-### Browser doesn't start
-```bash
-python -m playwright install chromium
-```
-
-## Recommended Models
-
-| Provider | Model | Notes |
-|----------|-------|-------|
-| LM Studio | Llama 3.1 8B, Qwen 2.5 7B | Free, local |
-| OpenAI | gpt-4o-mini, gpt-4o | Best instruction following |
-| Anthropic | claude-3-sonnet | Good reasoning |
-| Google | gemini-1.5-flash | Fast and capable |
-
-## License
+## 📄 License
 
 MIT License - see [LICENSE](LICENSE)
