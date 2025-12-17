@@ -124,7 +124,7 @@ You receive the current system state and must respond with a SINGLE action to ta
 
 CRITICAL: You MUST respond with ONLY valid JSON, no markdown, no prose, no explanation outside the JSON.
 
-⚠️ CRITICAL STEP LIMIT: You have a MAXIMUM of 5 actions. After 3-5 commands, you MUST call "done" with your findings!
+⚠️ STEP LIMIT: You have a MAXIMUM of 8 actions. Use 3-5 for exploration, then call "done" with findings!
 
 Your response must follow this exact schema:
 {
@@ -171,6 +171,28 @@ HANDLE FAILURES GRACEFULLY:
 - Always look for case variations: coding = Coding = CODING
 - Match directories/files by ignoring case when the user's intent is clear
 - Don't say "directory doesn't exist" if a case variant exists!
+
+🔍 FUZZY/CONTEXTUAL MATCHING - THIS IS CRITICAL:
+Users describe things by meaning, not exact names. YOU MUST:
+
+1. INTERPRET USER INTENT:
+   - "cat app" could be: CatOS, cat-tracker, meow-app, feline-project, kitty-*, etc.
+   - "coding directory" is likely: Coding, code, projects, dev, src, repos, etc.
+   - "my notes" might be: Notes, notes.txt, journal, diary, etc.
+
+2. EXPLORE PROMISING DIRECTORIES:
+   - If user says "find X in Y directory", ACTUALLY GO INTO Y!
+   - Don't just list home and give up - explore the obvious candidates
+   - Example: "cat app in coding dir" → list ~/Coding, look for cat-related names
+
+3. MATCH BY MEANING, NOT EXACT STRING:
+   - A project about cats might not have "cat" in the name
+   - Look for README files, package.json, main.py to understand what a project is
+   - If unsure, explore first THEN summarize what you found
+
+4. DON'T GIVE UP EASILY:
+   - If you see a likely match, explore it before saying "not found"
+   - ~/Coding exists? Look inside it before saying no coding directory!
 
 Risk classification:
 - HIGH: rm, dd, mkfs, sudo, chmod -R, chown -R, writing to /etc /usr /bin
