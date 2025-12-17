@@ -7,7 +7,7 @@ Provides common functionality for all agent types.
 from abc import ABC, abstractmethod
 from typing import Any
 
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
 from langchain_openai import ChatOpenAI
 
 from ..state import AgentState
