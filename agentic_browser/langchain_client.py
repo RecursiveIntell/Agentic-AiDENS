@@ -106,6 +106,11 @@ Set requires_approval=true for HIGH risk and MEDIUM risk actions."""
         self.visited_urls: list[str] = []
         self.extracted_summaries: list[str] = []
         
+        # State pruning - store condensed summaries instead of full text
+        self.page_summaries: dict[str, str] = {}  # URL -> summary
+        self.step_count: int = 0
+        self.last_visible_text: str = ""  # Cache to avoid re-summarizing same content
+        
     def close(self) -> None:
         """Close the client (no-op for LangChain)."""
         pass
@@ -120,49 +125,139 @@ Set requires_approval=true for HIGH risk and MEDIUM risk actions."""
         if summary and len(summary) < 500:
             self.extracted_summaries.append(summary[:500])
     
+    def summarize_page_content(self, url: str, title: str, visible_text: str) -> str:
+        """Summarize page content to reduce context size.
+        
+        Args:
+            url: Current page URL
+            title: Page title
+            visible_text: Full visible text (potentially 8000+ chars)
+            
+        Returns:
+            Condensed summary (200-400 chars) for context
+        """
+        # Return cached summary if we already summarized this URL
+        if url in self.page_summaries:
+            return self.page_summaries[url]
+        
+        # Skip summarization for very short content
+        if len(visible_text) < 500:
+            return visible_text
+        
+        # Use LLM to create a brief summary
+        try:
+            summary_prompt = f"""Summarize this webpage content in 2-3 sentences (max 200 words).
+Focus on: key information, main topic, important data points.
+
+Page: {title}
+URL: {url}
+Content:
+{visible_text[:3000]}
+
+Summary:"""
+            
+            response = self.llm.invoke([HumanMessage(content=summary_prompt)])
+            summary = response.content.strip()
+            
+            # Cache the summary
+            self.page_summaries[url] = summary
+            
+            # Keep summaries cache manageable
+            if len(self.page_summaries) > 10:
+                # Remove oldest entries
+                oldest_urls = list(self.page_summaries.keys())[:-10]
+                for old_url in oldest_urls:
+                    del self.page_summaries[old_url]
+            
+            return summary
+            
+        except Exception:
+            # Fallback: truncate to first 500 chars
+            return visible_text[:500] + "..."
+    
     def _build_state_message(self, state: dict[str, Any]) -> str:
-        """Build the current state message for the LLM."""
+        """Build the current state message for the LLM with state pruning.
+        
+        Uses summaries instead of full text after the first few steps to keep
+        context size manageable.
+        """
+        self.step_count += 1
+        
         # Format visited URLs
         visited_str = "\n".join(f"- {url}" for url in self.visited_urls[-10:]) if self.visited_urls else "(none yet)"
         
-        # Format links
+        # Format links - only top 10 to reduce size
         links = state.get('top_links', [])
         links_str = "\n".join(
-            f"- [{l.get('text', 'no text')}]({l.get('href', '#')})"
-            for l in links[:15]
+            f"- [{l.get('text', 'no text')[:40]}]({l.get('href', '#')})"
+            for l in links[:10]
         ) if links else "(no links found)"
         
-        # Format recent history
+        # Format recent history with sliding window
+        # Keep detailed history for last 3 actions, summarize older ones
         history = state.get('recent_history', [])
-        history_str = "\n".join(
-            f"- {item.get('action', 'unknown')}: {item.get('result', '')}"
-            for item in history
-        ) if history else "(no previous actions)"
+        if len(history) > 3:
+            # Summarize older history
+            old_actions = [h.get('action', '?') for h in history[:-3]]
+            old_summary = f"(Earlier: {', '.join(old_actions)})"
+            recent_history = history[-3:]
+            history_str = old_summary + "\n" + "\n".join(
+                f"- {item.get('action', 'unknown')}: {item.get('result', '')[:100]}"
+                for item in recent_history
+            )
+        else:
+            history_str = "\n".join(
+                f"- {item.get('action', 'unknown')}: {item.get('result', '')[:100]}"
+                for item in history
+            ) if history else "(no previous actions)"
         
-        # Build the message
-        message = f"""Current Page State:
+        # STATE PRUNING: Use summaries after step 2 to reduce context
+        current_url = state.get('current_url', '')
+        page_title = state.get('page_title', '')
+        visible_text = state.get('visible_text', '')
+        
+        if self.step_count <= 2:
+            # First 2 steps: full context for orientation
+            visible_section = f"Visible Text:\n{visible_text[:3000]}"
+        else:
+            # Later steps: use summarized content
+            page_summary = self.summarize_page_content(current_url, page_title, visible_text)
+            visible_section = f"Page Summary:\n{page_summary}"
+        
+        # Condensed extracted data - just show keys and truncated values
+        extracted = state.get('extracted_data', {})
+        if extracted:
+            extracted_lines = []
+            for key, value in list(extracted.items())[-5:]:  # Last 5 extractions
+                val_str = str(value)[:200] if isinstance(value, str) else str(value)[:100]
+                extracted_lines.append(f"- {key}: {val_str}...")
+            extracted_str = "\n".join(extracted_lines)
+        else:
+            extracted_str = "(none)"
+        
+        # Build compact message
+        message = f"""Current State [Step {self.step_count}]:
 - Goal: {state.get('goal', '')}
-- URL: {state.get('current_url', '')}
-- Title: {state.get('page_title', '')}
+- URL: {current_url}
+- Title: {page_title}
 
-Visible Text (truncated):
-{state.get('visible_text', '')[:4000]}
+{visible_section}
 
 Top Links:
 {links_str}
 
-⚠️ ALREADY VISITED URLs (do NOT click these again):
+⚠️ VISITED (do NOT revisit):
 {visited_str}
 
 Recent Actions:
 {history_str}
 
-Extracted Data So Far:
-{json.dumps(state.get('extracted_data', {}), indent=2)}
+Extracted Data:
+{extracted_str}
 
 {state.get('additional_context', '')}
 
-What is your next action? Respond with JSON only."""
+Next action? JSON only."""
         
         return message
     
