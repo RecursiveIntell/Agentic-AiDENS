@@ -8,6 +8,7 @@ Provides unified LLM interface with adapters for different providers:
 """
 
 import json
+import random
 import time
 from abc import ABC, abstractmethod
 from typing import Any, Optional, Protocol
@@ -15,6 +16,62 @@ from typing import Any, Optional, Protocol
 import httpx
 
 from .providers import Provider, ProviderConfig
+
+
+# Configuration
+DEFAULT_TIMEOUT = 120.0  # Increased for reasoning models
+DEFAULT_MAX_TOKENS = 2000  # Increased for better responses
+
+# Models that need higher token limits
+REASONING_MODELS = {
+    "o1", "o1-preview", "o1-mini",  # OpenAI reasoning
+    "claude-3-opus", "claude-3-5-sonnet",  # Anthropic advanced
+    "gemini-1.5-pro", "gemini-ultra",  # Google advanced
+}
+
+
+def get_backoff_time(attempt: int, base: float = 2.0, max_wait: float = 60.0) -> float:
+    """Calculate exponential backoff with jitter.
+    
+    Args:
+        attempt: Retry attempt number (0-indexed)
+        base: Base multiplier
+        max_wait: Maximum wait time in seconds
+        
+    Returns:
+        Wait time in seconds with random jitter
+    """
+    wait = min(base ** (attempt + 1), max_wait)
+    jitter = random.uniform(0, wait * 0.1)  # 10% jitter
+    return wait + jitter
+
+
+def get_max_tokens_for_model(model: str) -> int:
+    """Get appropriate max_tokens for a model.
+    
+    Args:
+        model: Model name
+        
+    Returns:
+        Recommended max_tokens value
+    """
+    model_lower = model.lower()
+    
+    # Reasoning models need higher limits
+    for reasoning_model in REASONING_MODELS:
+        if reasoning_model in model_lower:
+            return 4000
+    
+    # Opus and large models
+    if "opus" in model_lower or "ultra" in model_lower:
+        return 4000
+    
+    # Pro models
+    if "pro" in model_lower or "sonnet" in model_lower:
+        return 3000
+    
+    # Default
+    return DEFAULT_MAX_TOKENS
 
 
 class Message:
@@ -60,16 +117,17 @@ class OpenAIAdapter(LLMAdapter):
     Works with OpenAI, LM Studio, and other OpenAI-compatible APIs.
     """
     
-    def __init__(self, config: ProviderConfig):
+    def __init__(self, config: ProviderConfig, timeout: float = None):
         self.config = config
         self.endpoint = config.endpoint.rstrip("/")
         self.model = config.effective_model
+        self.max_tokens = get_max_tokens_for_model(self.model)
         
         self.headers = {"Content-Type": "application/json"}
         if config.api_key:
             self.headers["Authorization"] = f"Bearer {config.api_key}"
         
-        self.client = httpx.Client(timeout=60.0)
+        self.client = httpx.Client(timeout=timeout or DEFAULT_TIMEOUT)
     
     def chat_completion(
         self,
@@ -82,14 +140,15 @@ class OpenAIAdapter(LLMAdapter):
             "model": self.model,
             "messages": [m.to_dict() for m in messages],
             "temperature": 0.1,
-            "max_tokens": 1000,
+            "max_tokens": self.max_tokens,
         }
         
         last_error = None
         for attempt in range(max_retries + 1):
             try:
                 if attempt > 0:
-                    wait_time = 2 ** (attempt + 1)
+                    wait_time = get_backoff_time(attempt)
+                    print(f"[DEBUG] Retry {attempt}/{max_retries} after {wait_time:.1f}s")
                     time.sleep(wait_time)
                 
                 response = self.client.post(url, json=payload, headers=self.headers)
@@ -100,7 +159,13 @@ class OpenAIAdapter(LLMAdapter):
                 
             except httpx.HTTPStatusError as e:
                 last_error = e
-                if e.response.status_code == 429 and attempt < max_retries:
+                # Retry on rate limit or server errors
+                if e.response.status_code in (429, 500, 502, 503, 504) and attempt < max_retries:
+                    continue
+                raise
+            except httpx.TimeoutException as e:
+                last_error = e
+                if attempt < max_retries:
                     continue
                 raise
             except Exception as e:
@@ -123,11 +188,12 @@ class AnthropicAdapter(LLMAdapter):
     
     ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
     
-    def __init__(self, config: ProviderConfig):
+    def __init__(self, config: ProviderConfig, timeout: float = None):
         self.config = config
         self.endpoint = config.custom_endpoint or self.ANTHROPIC_API_URL
         self.model = config.effective_model
         self.api_key = config.api_key
+        self.max_tokens = get_max_tokens_for_model(self.model)
         
         self.headers = {
             "Content-Type": "application/json",
@@ -135,7 +201,7 @@ class AnthropicAdapter(LLMAdapter):
             "anthropic-version": "2023-06-01",
         }
         
-        self.client = httpx.Client(timeout=60.0)
+        self.client = httpx.Client(timeout=timeout or DEFAULT_TIMEOUT)
     
     def chat_completion(
         self,
@@ -160,7 +226,7 @@ class AnthropicAdapter(LLMAdapter):
         
         payload = {
             "model": self.model,
-            "max_tokens": 1000,
+            "max_tokens": self.max_tokens,
             "messages": user_messages,
         }
         
@@ -171,7 +237,8 @@ class AnthropicAdapter(LLMAdapter):
         for attempt in range(max_retries + 1):
             try:
                 if attempt > 0:
-                    wait_time = 2 ** (attempt + 1)
+                    wait_time = get_backoff_time(attempt)
+                    print(f"[DEBUG] Retry {attempt}/{max_retries} after {wait_time:.1f}s")
                     time.sleep(wait_time)
                 
                 response = self.client.post(
@@ -190,7 +257,13 @@ class AnthropicAdapter(LLMAdapter):
                 
             except httpx.HTTPStatusError as e:
                 last_error = e
-                if e.response.status_code == 429 and attempt < max_retries:
+                # Retry on rate limit or server errors
+                if e.response.status_code in (429, 500, 502, 503, 504, 529) and attempt < max_retries:
+                    continue
+                raise
+            except httpx.TimeoutException as e:
+                last_error = e
+                if attempt < max_retries:
                     continue
                 raise
             except Exception as e:
@@ -213,13 +286,14 @@ class GoogleAdapter(LLMAdapter):
     
     GOOGLE_API_URL = "https://generativelanguage.googleapis.com/v1beta/models"
     
-    def __init__(self, config: ProviderConfig):
+    def __init__(self, config: ProviderConfig, timeout: float = None):
         self.config = config
         self.base_url = config.custom_endpoint or self.GOOGLE_API_URL
         self.model = config.effective_model
         self.api_key = config.api_key
+        self.max_tokens = get_max_tokens_for_model(self.model)
         
-        self.client = httpx.Client(timeout=60.0)
+        self.client = httpx.Client(timeout=timeout or DEFAULT_TIMEOUT)
     
     def chat_completion(
         self,
@@ -248,7 +322,7 @@ class GoogleAdapter(LLMAdapter):
             "contents": contents,
             "generationConfig": {
                 "temperature": 0.1,
-                "maxOutputTokens": 1000,
+                "maxOutputTokens": self.max_tokens,
             },
         }
         
@@ -261,7 +335,8 @@ class GoogleAdapter(LLMAdapter):
         for attempt in range(max_retries + 1):
             try:
                 if attempt > 0:
-                    wait_time = 2 ** (attempt + 1)
+                    wait_time = get_backoff_time(attempt)
+                    print(f"[DEBUG] Retry {attempt}/{max_retries} after {wait_time:.1f}s")
                     time.sleep(wait_time)
                 
                 response = self.client.post(
@@ -282,7 +357,13 @@ class GoogleAdapter(LLMAdapter):
                 
             except httpx.HTTPStatusError as e:
                 last_error = e
-                if e.response.status_code == 429 and attempt < max_retries:
+                # Retry on rate limit or server errors
+                if e.response.status_code in (429, 500, 502, 503, 504) and attempt < max_retries:
+                    continue
+                raise
+            except httpx.TimeoutException as e:
+                last_error = e
+                if attempt < max_retries:
                     continue
                 raise
             except Exception as e:

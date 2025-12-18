@@ -186,15 +186,14 @@ class SettingsDialog(QDialog):
                 break
         self.provider_combo.setCurrentIndex(provider_index)
         
-        # Load other fields
-        self.api_key_edit.setText(settings.api_key or "")
+        # Load other fields (API key is loaded per-provider in _on_provider_changed)
         self.endpoint_edit.setText(settings.custom_endpoint or "")
         self.profile_edit.setText(settings.profile_name)
         self.max_steps_spin.setValue(settings.max_steps)
         self.headless_check.setChecked(settings.headless)
         self.auto_approve_check.setChecked(settings.auto_approve)
         
-        # Update provider-specific UI
+        # Update provider-specific UI (this loads the correct API key)
         self._on_provider_changed()
         
         # Set model after updating suggestions
@@ -208,6 +207,20 @@ class SettingsDialog(QDialog):
             provider = Provider(provider_value)
         except ValueError:
             provider = Provider.LM_STUDIO
+        
+        # Save current API key to the previous provider before switching
+        # (Only if we have a previous provider tracked)
+        if hasattr(self, '_current_provider_value') and self._current_provider_value:
+            current_key = self.api_key_edit.text().strip()
+            if current_key:
+                self.store.settings.set_api_key_for_provider(self._current_provider_value, current_key)
+        
+        # Track current provider
+        self._current_provider_value = provider_value
+        
+        # Load API key for the new provider
+        api_key = self.store.settings.get_api_key_for_provider(provider_value) or ""
+        self.api_key_edit.setText(api_key)
         
         # Update API key placeholder and requirement
         requires_key = PROVIDER_REQUIRES_API_KEY.get(provider, True)
@@ -324,10 +337,12 @@ class SettingsDialog(QDialog):
             self.api_key_edit.setFocus()
             return
         
-        # Save settings
+        # Save API key for this provider
+        self.store.settings.set_api_key_for_provider(provider_value, api_key)
+        
+        # Save other settings
         self.store.update(
             provider=provider.value,
-            api_key=api_key,
             model=self.model_combo.currentText() or None,
             custom_endpoint=self.endpoint_edit.text().strip() or None,
             profile_name=self.profile_edit.text().strip() or "default",

@@ -5,16 +5,50 @@ Stores tool instances outside of state to enable checkpointing.
 """
 
 import threading
-from typing import Any, Optional
-from dataclasses import dataclass
+from typing import Any, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .browser_manager import LazyBrowserManager
 
 
-@dataclass
 class ToolSet:
-    """Container for tools associated with a session."""
-    config: Any
-    browser_tools: Any = None
-    os_tools: Any = None
+    """Container for tools associated with a session.
+    
+    Supports lazy browser initialization via browser_manager.
+    """
+    
+    def __init__(
+        self,
+        config: Any,
+        browser_manager: Optional["LazyBrowserManager"] = None,
+        os_tools: Any = None,
+    ):
+        """Initialize tool set.
+        
+        Args:
+            config: AgentConfig instance
+            browser_manager: Optional LazyBrowserManager for on-demand browser
+            os_tools: Optional OSTools instance
+        """
+        self.config = config
+        self._browser_manager = browser_manager
+        self.os_tools = os_tools
+    
+    @property
+    def browser_tools(self) -> Any:
+        """Get browser tools, lazily initializing browser if needed.
+        
+        Returns:
+            BrowserTools instance or None if no browser_manager
+        """
+        if self._browser_manager is None:
+            return None
+        return self._browser_manager.get_browser_tools()
+    
+    @property
+    def browser_manager(self) -> Optional["LazyBrowserManager"]:
+        """Get the browser manager (without triggering initialization)."""
+        return self._browser_manager
 
 
 class ToolRegistry:
@@ -54,7 +88,7 @@ class ToolRegistry:
         self,
         session_id: str,
         config: Any,
-        browser_tools: Any = None,
+        browser_manager: Optional["LazyBrowserManager"] = None,
         os_tools: Any = None,
     ) -> None:
         """Register tools for a session.
@@ -62,13 +96,13 @@ class ToolRegistry:
         Args:
             session_id: Unique session identifier
             config: AgentConfig instance
-            browser_tools: Optional BrowserTools instance
+            browser_manager: Optional LazyBrowserManager for on-demand browser
             os_tools: Optional OSTools instance
         """
         with self._tools_lock:
             self._tools[session_id] = ToolSet(
                 config=config,
-                browser_tools=browser_tools,
+                browser_manager=browser_manager,
                 os_tools=os_tools,
             )
     
@@ -84,11 +118,11 @@ class ToolRegistry:
         with self._tools_lock:
             return self._tools.get(session_id)
     
-    def update_browser_tools(self, session_id: str, browser_tools: Any) -> None:
-        """Update browser tools for a session."""
+    def update_browser_manager(self, session_id: str, browser_manager: "LazyBrowserManager") -> None:
+        """Update browser manager for a session."""
         with self._tools_lock:
             if session_id in self._tools:
-                self._tools[session_id].browser_tools = browser_tools
+                self._tools[session_id]._browser_manager = browser_manager
     
     def update_os_tools(self, session_id: str, os_tools: Any) -> None:
         """Update OS tools for a session."""

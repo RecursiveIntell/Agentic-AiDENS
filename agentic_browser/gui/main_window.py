@@ -182,6 +182,7 @@ class MainWindow(QMainWindow):
         self._process: Optional[QProcess] = None
         self._current_step = 0
         self._output_buffer = ""
+        self._capturing_final_answer = False
         
         self._setup_ui()
         self._connect_signals()
@@ -576,9 +577,54 @@ class MainWindow(QMainWindow):
         # Log the line
         self._log(clean_line, level)
         
-        # Check for final answer
-        if "final answer" in lower or "goal accomplished" in lower:
-            self.status_text.append(f"✅ {clean_line}")
+        if "supervisor" in lower and "routing to" in lower:
+            # Capture Supervisor routing
+            msg = clean_line
+            if "Supervisor" in msg:
+                msg = msg.replace("Supervisor", "").replace("→", "").strip()
+                if "routing to" in msg:
+                    domain = msg.split("routing to")[-1].strip()
+                    self.status_text.append(f"🔄 Routing to: {domain}")
+            else:
+                self.status_text.append(f"🔄 {clean_line}")
+        elif "agent active" in lower:
+            # Capture active agent step
+            agent = ""
+            if "research" in lower: agent = "Research"
+            elif "browser" in lower: agent = "Browser"
+            elif "code" in lower: agent = "Code"
+            elif "os" in lower: agent = "OS"
+            else: agent = "Agent"
+            
+            step_match = re.search(r"step\s*(\d+)", lower)
+            step_num = step_match.group(1) if step_match else "?"
+            
+            self.status_text.append(f"🤖 Step {step_num}: {agent} agent working...")
+            
+        # Check for final answer, report, or task completion
+        is_completion = any(x in lower for x in [
+            "final answer", "goal accomplished", "task completed",
+            "## report:", "### analysis", "### findings",
+            "completed successfully", "extracted_data keys",
+            "forcing completion"
+        ])
+        
+        if is_completion:
+            self._capturing_final_answer = True
+            self._log(clean_line, "success")  # Log as success
+            self.status_text.append(f"\n✅ RESULT:\n{clean_line}")
+        elif self._capturing_final_answer:
+            # Check if we should stop capturing (new action or supervisor routing)
+            should_stop = any(x in lower for x in [
+                "supervisor →", "routing to", "step ", "agent active",
+                "starting agent", "[debug]", "approval"
+            ]) or clean_line.startswith("─") or clean_line.startswith("━")
+            
+            if should_stop:
+                self._capturing_final_answer = False
+            else:
+                # Continue capturing content
+                self.status_text.append(clean_line)
     
     def _handle_approval_request(self, json_str: str):
         """Handle approval request from subprocess via IPC protocol."""

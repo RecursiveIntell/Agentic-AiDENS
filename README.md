@@ -1,19 +1,33 @@
 # Agentic Browser
 
-A Linux-first **dual-domain agent** that controls both your **web browser** (via Playwright) and your **local Linux system** (via shell commands). Now powered by **LangGraph** for robust multi-agent orchestration.
+A Linux-first **multi-agent system** that controls your **web browser**, **local system**, and specialized tools. Powered by **LangGraph** for intelligent task orchestration.
 
 ## 🚀 Key Features
 
-*   **Multi-Agent Architecture**: Built on [LangGraph](https://langchain-ai.github.io/langgraph/), featuring a Supervisor agent that intelligently routes tasks to specialized Browser and OS agents.
-*   **Dual-Domain Control**: Seamlessly switches between web browsing and local system operations.
-*   **Multi-Provider Support**: Works with: 
-    *   **OpenAI** (GPT-4o, o1)
-    *   **Anthropic** (Claude 3.5 Sonnet)
-    *   **Google** (Gemini 1.5 Pro/Flash)
-    *   **LM Studio** (Local LLMs like Llama 3, Qwen 2.5)
-*   **Browser Automation**: Full control via Playwright (navigation, clicking, typing, extraction).
-*   **OS Integration**: Safe execution of shell commands and file operations with risk-based guardrails.
-*   **Modern GUI**: Dark-themed graphical interface for monitoring agent progress.
+*   **12-Node Agent Architecture**: Built on [LangGraph](https://langchain-ai.github.io/langgraph/) with a Supervisor that routes to 11 specialized agents.
+*   **Multi-Provider LLM Support**: 
+    *   **OpenAI** (GPT-4o, o1-preview)
+    *   **Anthropic** (Claude 3.5 Sonnet, Claude 3 Opus)
+    *   **Google** (Gemini 1.5 Pro/Flash, Gemini 2.0)
+    *   **LM Studio** (Local LLMs - Llama 3, Qwen 2.5)
+*   **Comprehensive Automation**: Browser, OS, research, code analysis, and 6 new specialized agents.
+*   **Safety Guardrails**: Risk-based permissions with user approval for dangerous operations.
+*   **Modern GUI**: Dark-themed interface with real-time progress tracking.
+
+## 🤖 Available Agents
+
+| Agent | Purpose | Example |
+|-------|---------|---------|
+| **Browser** | Web navigation & interaction | "Navigate to github.com" |
+| **Research** | Multi-source web research | "Research quantum computing" |
+| **OS** | File operations & shell commands | "List files in Downloads" |
+| **Code** | Project analysis & understanding | "Analyze my Python project" |
+| **Data** | Format conversion & processing | "Convert data.json to CSV" |
+| **Network** | Diagnostics & API testing | "Ping google.com" |
+| **SysAdmin** | System monitoring & services | "Check memory usage" |
+| **Media** | Video/audio/image processing | "Convert video to MP3" |
+| **Package** | Python/Node.js environment setup | "Create a venv and install Flask" |
+| **Automation** | Notifications & scheduling | "Remind me in 5 minutes" |
 
 ## 📦 Installation
 
@@ -33,75 +47,128 @@ pip install -e ".[dev]"
 python -m playwright install chromium
 ```
 
+### Optional: Media Agent Dependencies
+```bash
+# For video/audio processing
+sudo dnf install ffmpeg  # or apt install ffmpeg
+
+# For image processing
+sudo dnf install ImageMagick  # or apt install imagemagick
+```
+
 ## ⚡ Quick Start
 
 ### GUI Mode (Recommended)
-Launch the graphical interface to interact with the agent visually:
 ```bash
 agentic-browser gui
 ```
 
 ### CLI Mode
-Run the agent directly from the terminal:
 ```bash
-# Browser task
-agentic-browser run "Search DuckDuckGo for LangGraph tutorials"
+# Research task
+agentic-browser run "Research the latest developments in AI agents"
 
-# OS task
-agentic-browser run "List files in my downloads folder"
+# Code analysis
+agentic-browser run "Analyze my project in ~/Coding/MyApp"
 
-# Complex dual-domain task
-agentic-browser run "Download the latest python logo and save it to my pictures folder"
+# System monitoring
+agentic-browser run "Check what's using my disk space"
+
+# Media conversion
+agentic-browser run "Convert ~/Videos/presentation.mp4 to MP3"
+
+# Network diagnostics
+agentic-browser run "Check if my web server on port 8080 is responding"
 ```
 
 ## 🛠️ Configuration
 
-Settings are stored in `~/.agentic_browser/settings.json`.
+Settings stored in `~/.agentic_browser/settings.json`.
 
 ### CLI Options
 | Flag | Description |
 |------|-------------|
 | `--model-endpoint` | Custom LLM API endpoint URL |
 | `--model` | Model name (e.g., `gpt-4o`, `claude-3-5-sonnet`) |
-| `--headless` | Run browser in headless mode (default: false) |
+| `--headless` | Run browser in headless mode |
 | `--auto-approve` | Skip approval prompts for medium-risk actions |
 | `--fresh-profile` | Start with a clean browser profile |
 | `--enable-tracing` | Save Playwright traces for debugging |
-| `--legacy` | Use the old single-agent implementation |
 
 ### Environment Variables
 ```bash
-# Provider Configuration
-AGENTIC_BROWSER_PROVIDER # one of: openai, anthropic, google, lm_studio (default)
+# Provider (default: lm_studio for local)
+AGENTIC_BROWSER_PROVIDER=openai  # openai, anthropic, google, lm_studio
 
-# API Keys (if not using local models)
-OPENAI_API_KEY
-ANTHROPIC_API_KEY
-GOOGLE_API_KEY
+# API Keys
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+GOOGLE_API_KEY=...
 ```
 
 ## 🏗️ Architecture
 
-The system uses a graph-based architecture:
-
-1.  **Supervisor Node**: Analyzes the user's goal and current state to decide which specialist to call next.
-2.  **Browser Agent**: Handles internet-facing tasks using Playwright tools.
-3.  **OS Agent**: Handles local system tasks using shell tools.
-4.  **Safety Layer**: Intercepts actions to enforce permissions and prompt for user approval on risky operations.
+```
+┌─────────────────────────────────────────────────────────┐
+│                      Supervisor                         │
+│     (Routes tasks based on goal analysis)               │
+└─────────────────────┬───────────────────────────────────┘
+                      │
+    ┌─────────────────┼─────────────────┐
+    ▼                 ▼                 ▼
+┌─────────┐     ┌─────────┐       ┌─────────┐
+│ Browser │     │   OS    │       │ Research│
+│  Agent  │     │  Agent  │       │  Agent  │
+└─────────┘     └─────────┘       └─────────┘
+    ▼                 ▼                 ▼
+┌─────────┐     ┌─────────┐       ┌─────────┐
+│  Code   │     │  Data   │       │ Network │
+│  Agent  │     │  Agent  │       │  Agent  │
+└─────────┘     └─────────┘       └─────────┘
+    ▼                 ▼                 ▼
+┌─────────┐     ┌─────────┐       ┌─────────┐
+│SysAdmin │     │  Media  │       │ Package │
+│  Agent  │     │  Agent  │       │  Agent  │
+└─────────┘     └─────────┘       └─────────┘
+                      ▼
+              ┌─────────────┐
+              │ Automation  │
+              │   Agent     │
+              └─────────────┘
+```
 
 ## 🛡️ Safety & Permissions
 
-The agent creates a sandbox but operates with your user permissions. To prevent accidents, it classifies actions by risk:
+Actions are classified by risk level:
 
-*   **HIGH RISK** (Always asks): `rm`, `sudo`, `dd`, writing to system paths.
-*   **MEDIUM RISK** (Asks unless auto-approve): Writing files to home dir, running scripts.
-*   **LOW RISK** (Allowed): `ls`, `cat`, reading files, web navigation.
+| Risk | Examples | Behavior |
+|------|----------|----------|
+| **HIGH** | `rm`, `sudo`, service control, system files | Always asks |
+| **MEDIUM** | Writing files, pip install, HTTP POST | Asks unless auto-approve |
+| **LOW** | `ls`, `cat`, ping, read files | Allowed |
+
+### Protected Resources
+- Critical services (systemd, dbus, NetworkManager) cannot be managed
+- pip install only works in virtual environments (not system-wide)
+- Files outside home directory are restricted
 
 ## 🐛 Troubleshooting
 
-*   **Browser doesn't start**: Ensure you ran `playwright install`.
-*   **Permission errors**: The agent cannot do what your user account cannot do.
-*   **Model errors**: Check your API keys and internet connection. For local models, ensure LM Studio/Ollama is running.
+| Issue | Solution |
+|-------|----------|
+| Browser doesn't start | Run `playwright install chromium` |
+| Model 404 error | Check API key and model name |
+| Permission errors | Agent uses your user permissions |
+| ffmpeg not found | Install ffmpeg for Media agent |
+| Service control fails | May need sudo (shown as command to run) |
+
+## 📈 Recent Updates
+
+- **6 New Agents**: Data, Network, SysAdmin, Media, Package, Automation
+- **Improved Research**: URL deduplication, paywall detection
+- **Robust LLM Handling**: Exponential backoff, dynamic token limits
+- **Better GUI**: Improved final answer parsing and display
+- **Resource Cleanup**: atexit handlers for browser cleanup
 
 ## 📄 License
 

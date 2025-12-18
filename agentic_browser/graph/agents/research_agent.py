@@ -48,11 +48,13 @@ CRITICAL RULES:
 1. ALWAYS start with DuckDuckGo - don't make up URLs!
 2. Only visit URLs you actually see in search results
 3. If a site fails (ERR_NAME_NOT_RESOLVED, 404), skip it and try another
-4. After 3+ errors on same URL, move on
+4. STOP AFTER 3 SOURCES: If you have info from 3 sites, YOU MUST CALL DONE.
+5. Do not search endlessly. 3 good sources is success.
 
 ERROR RECOVERY:
 - If research stalls, synthesize what you have and call "done"
 - A partial report is better than no report
+- If you get 404s, try one more, then give up and report findings
 
 Respond with JSON:
 {
@@ -158,8 +160,9 @@ You have some research data. Options:
         
         elif sources_visited >= 3:
             action_hint = """
-You have visited 3+ sources. Synthesize your findings now:
-{"action": "done", "args": {"summary": "## Research Report\n\n[Your detailed findings here]"}}
+MANDATORY COMPLETION: You have visited 3+ sources.
+You MUST stop researching now.
+Action: {"action": "done", "args": {"summary": "## Research Report\\n\\n[Your detailed findings here]"}}
 """
         else:
             action_hint = "Continue research."
@@ -226,19 +229,54 @@ Data collected:
             
             visited = None
             if action_data.get("action") == "goto":
-                visited = action_data.get("args", {}).get("url")
+                target_url = action_data.get("args", {}).get("url", "")
+                # Check for duplicate URL (skip search engines)
+                if target_url and 'duckduckgo' not in target_url:
+                    # Normalize URL for comparison
+                    normalized = target_url.split('?')[0].rstrip('/')
+                    already_visited = any(
+                        u.split('?')[0].rstrip('/') == normalized 
+                        for u in state['visited_urls'] if u
+                    )
+                    if already_visited:
+                        # Skip duplicate, try to continue
+                        return self._update_state(
+                            state,
+                            messages=[AIMessage(content=f"Skipped duplicate URL: {target_url}")],
+                            error=f"Already visited {target_url}, try a different source",
+                        )
+                visited = target_url
             
             extracted = None
             if action_data.get("action") == "extract_visible_text" and result.success:
-                key = f"research_source_{sources_visited + 1}"
-                # content might be dict {"text": "..."} or string
+                # Get content
                 content_str = ""
                 if isinstance(result.data, dict):
                     content_str = result.data.get("text", str(result.data))
                 else:
                     content_str = str(result.data) if result.data else str(result.message)
                 
-                extracted = {key: content_str[:2000]} # Increased capture size
+                # Quality check: detect paywalls, access denied, cookies notices
+                lower_content = content_str.lower()[:1000]
+                is_low_quality = any(phrase in lower_content for phrase in [
+                    "access denied", "403 forbidden", "404 not found",
+                    "subscribe to read", "subscription required", "paywall",
+                    "please enable javascript", "browser not supported",
+                    "captcha", "robot", "cookies must be enabled",
+                    "sign in to continue", "create an account to",
+                ])
+                
+                if is_low_quality and len(content_str) < 500:
+                    # Low quality content - note but don't save
+                    return self._update_state(
+                        state,
+                        messages=[AIMessage(content="Low quality content (paywall/error), trying another source")],
+                        error="Content blocked or inaccessible, try another URL",
+                    )
+                
+                # Save good content
+                key = f"research_source_{sources_visited + 1}"
+                extracted = {key: content_str[:2000]}
             
             # Create tool output message
             tool_content = "Action successful."

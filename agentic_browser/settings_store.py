@@ -8,7 +8,7 @@ import json
 import threading
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict
 
 from .config import get_base_dir
 from .providers import Provider, ProviderConfig
@@ -25,9 +25,12 @@ class Settings:
     
     # Provider settings (browser domain)
     provider: str = "lm_studio"
-    api_key: Optional[str] = None
+    api_key: Optional[str] = None  # Deprecated: for backwards compat
     model: Optional[str] = None
     custom_endpoint: Optional[str] = None
+    
+    # Per-provider API keys (new: stores each provider's key separately)
+    provider_api_keys: Dict[str, str] = field(default_factory=dict)
     
     # OS domain provider settings
     routing_mode: str = "auto"  # auto | browser | os | ask
@@ -53,16 +56,36 @@ class Settings:
     langsmith_api_key: Optional[str] = None
     langsmith_project: str = "agentic-browser"
     
+    def get_api_key_for_provider(self, provider_value: str) -> Optional[str]:
+        """Get API key for a specific provider."""
+        # First check per-provider keys
+        if provider_value in self.provider_api_keys:
+            return self.provider_api_keys[provider_value]
+        # Fallback to legacy api_key if it's the current provider
+        if provider_value == self.provider and self.api_key:
+            return self.api_key
+        return None
+    
+    def set_api_key_for_provider(self, provider_value: str, api_key: Optional[str]) -> None:
+        """Set API key for a specific provider."""
+        if api_key:
+            self.provider_api_keys[provider_value] = api_key
+        elif provider_value in self.provider_api_keys:
+            del self.provider_api_keys[provider_value]
+    
     def get_provider_config(self) -> ProviderConfig:
         """Get the provider configuration."""
         try:
             provider = Provider(self.provider)
         except ValueError:
             provider = Provider.LM_STUDIO
+        
+        # Get API key for the current provider
+        api_key = self.get_api_key_for_provider(self.provider)
             
         return ProviderConfig(
             provider=provider,
-            api_key=self.api_key,
+            api_key=api_key,
             model=self.model,
             custom_endpoint=self.custom_endpoint,
         )
@@ -70,7 +93,7 @@ class Settings:
     def set_provider_config(self, config: ProviderConfig) -> None:
         """Set the provider configuration."""
         self.provider = config.provider.value
-        self.api_key = config.api_key
+        self.set_api_key_for_provider(config.provider.value, config.api_key)
         self.model = config.model
         self.custom_endpoint = config.custom_endpoint
 
@@ -115,9 +138,11 @@ class SettingsStore:
                 self._settings = Settings(
                     # Browser domain settings
                     provider=data.get("provider", "lm_studio"),
-                    api_key=data.get("api_key"),
+                    api_key=data.get("api_key"),  # Legacy
                     model=data.get("model"),
                     custom_endpoint=data.get("custom_endpoint"),
+                    # Per-provider API keys
+                    provider_api_keys=data.get("provider_api_keys", {}),
                     # OS domain settings
                     routing_mode=data.get("routing_mode", "auto"),
                     os_provider=data.get("os_provider", "lm_studio"),
@@ -144,9 +169,11 @@ class SettingsStore:
         data = {
             # Browser domain settings
             "provider": self._settings.provider,
-            "api_key": self._settings.api_key,
+            "api_key": self._settings.api_key,  # Legacy
             "model": self._settings.model,
             "custom_endpoint": self._settings.custom_endpoint,
+            # Per-provider API keys
+            "provider_api_keys": self._settings.provider_api_keys,
             # OS domain settings
             "routing_mode": self._settings.routing_mode,
             "os_provider": self._settings.os_provider,

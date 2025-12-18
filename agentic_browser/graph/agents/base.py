@@ -121,6 +121,65 @@ class BaseAgent(ABC):
         """Return the system prompt for this agent type."""
         pass
     
+    def safe_invoke(self, messages: list) -> AIMessage:
+        """Invoke LLM with fallback handling for 404 errors.
+        
+        If the configured model is not found (404), this will:
+        1. Log the error
+        2. Switch to a fallback model (e.g. claude-3-haiku)
+        3. Re-initialize the LLM client
+        4. Retry the invocation
+        
+        Args:
+            messages: List of messages to send
+            
+        Returns:
+            AIMessage response
+            
+        Raises:
+            Exception: If retry fails or unrelated error
+        """
+        try:
+            return self.llm.invoke(messages)
+        except Exception as e:
+            error_msg = str(e).lower()
+            
+            # Check for 404 / model not found errors
+            if "404" in error_msg or "not_found" in error_msg or "model" in error_msg and "not found" in error_msg:
+                print(f"[WARN] detailed error: {str(e)}")
+                print(f"[WARN] Model {self.config.model} not found. Attempting fallback...")
+                
+                # Determine fallback model based on current provider/model
+                fallback_model = None
+                
+                if "claude" in (self.config.model or ""):
+                    # Fallback chain for Anthropic
+                    if "sonnet-20241022" in self.config.model:
+                        fallback_model = "claude-3-5-sonnet-20240620"
+                    elif "sonnet" in self.config.model:
+                        fallback_model = "claude-3-haiku-20240307"
+                    else:
+                        fallback_model = "claude-3-haiku-20240307"
+                elif "gpt" in (self.config.model or ""):
+                    # Fallback for OpenAI
+                    fallback_model = "gpt-4o-mini"
+                elif "gemini" in (self.config.model or ""):
+                    # Fallback for Google
+                    fallback_model = "gemini-1.5-flash"
+                
+                if fallback_model and fallback_model != self.config.model:
+                    print(f"[INFO] Switching to fallback model: {fallback_model}")
+                    
+                    # Update config and re-initialize LLM
+                    self.config.model = fallback_model
+                    self.llm = create_llm_client(self.config, max_tokens=1000)
+                    
+                    # Retry
+                    return self.llm.invoke(messages)
+            
+            # Re-raise if not handled or retry failed
+            raise e
+
     @abstractmethod
     def execute(self, state: AgentState) -> AgentState:
         """Execute the agent's task.

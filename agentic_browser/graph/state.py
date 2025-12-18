@@ -38,6 +38,7 @@ class AgentState(TypedDict):
     # Error tracking
     error: str | None
     retry_count: int
+    consecutive_errors: int
     
     # Step tracking
     step_count: int
@@ -78,6 +79,7 @@ def create_initial_state(
         files_accessed=[],
         error=None,
         retry_count=0,
+        consecutive_errors=0,
         step_count=0,
         max_steps=max_steps,
         pending_approval=None,

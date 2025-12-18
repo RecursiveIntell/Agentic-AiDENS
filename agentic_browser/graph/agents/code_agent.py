@@ -104,26 +104,43 @@ Respond with JSON:
                 error="OS tools not available for code analysis",
             )
         
+        # Collect recently accessed paths to discourage duplicates
+        recent_files = state['files_accessed'][-15:]
+        files_str = chr(10).join(f"  - {f}" for f in recent_files) if recent_files else "(none yet)"
+        
+        # Check for repeated patterns
+        repeat_warning = ""
+        if len(recent_files) >= 4:
+            last_4 = recent_files[-4:]
+            if len(set(last_4)) <= 2:  # Only 1-2 unique paths in last 4
+                repeat_warning = """
+⚠️ WARNING: You are repeating the same paths! 
+DO NOT explore the same directories again.
+Either read NEW files or call 'done' with your analysis.
+"""
+        
+        # Build info summary (compact)
+        data_keys = list(state['extracted_data'].keys())
+        collected_info = f"Collected {len(data_keys)} items: {data_keys[:5]}" if data_keys else "(none yet)"
+        
         task_context = f"""
 CODE TASK: {state['goal']}
 
 Files examined:
-{chr(10).join(state['files_accessed'][-10:]) or '(none yet)'}
+{files_str}
 
-Information gathered:
-{json.dumps(state['extracted_data'], indent=2)[:1500]}
-
-TIPS:
-- Start with os_list_dir to see project structure
-- Read README.md or main config files first
-- Look for entry points (main.py, index.js, etc.)
-- After understanding the project, call "done" with your analysis
+Data collected: {collected_info}
+{repeat_warning}
+IMPORTANT RULES:
+1. DO NOT re-read the same file twice
+2. After seeing README.md and a few key files, call "done" with analysis
+3. If step count is high ({state['step_count']}/{state['max_steps']}), complete NOW
 """
         
         messages = self._build_messages(state, task_context)
         
         try:
-            response = self.llm.invoke(messages)
+            response = self.safe_invoke(messages)
             
             # DEBUG: Print raw response
             print(f"\n{'='*60}")
@@ -136,6 +153,17 @@ TIPS:
             
             # DEBUG: Print parsed action
             print(f"[DEBUG] CodeAgent - Parsed Action: {action_data}")
+            
+            # Force completion if repeating same action too many times
+            target_path = action_data.get("args", {}).get("path", "")
+            if target_path and target_path in recent_files[-3:]:
+                print(f"[DEBUG] CodeAgent - Detected repeat of '{target_path}', forcing done")
+                summary = f"Analysis based on explored files: {', '.join(recent_files[:5])}"
+                return self._update_state(
+                    state,
+                    messages=[AIMessage(content="Completing analysis (repeat detected)")],
+                    extracted_data={"code_analysis": summary},
+                )
             
             if action_data.get("action") == "done":
                 print(f"[DEBUG] CodeAgent - Action is 'done', returning findings")
@@ -155,18 +183,26 @@ TIPS:
             )
             
             file_accessed = None
-            if action_data.get("action") in ("os_read_file", "os_list_dir"):
-                file_accessed = action_data.get("args", {}).get("path")
-            
-            # Use tool output as a message, not extracted_data
+            extracted = None
             action_name = action_data.get("action", "unknown")
             output_content = str(result.data if result.data else result.message)
+            
+            if action_data.get("action") in ("os_read_file", "os_list_dir"):
+                file_accessed = action_data.get("args", {}).get("path")
+                
+                # Store intermediate results to extracted_data so supervisor knows we're working
+                # This prevents the "no extracted_data" blocking loop
+                if result.success:
+                    key = f"code_{action_name}_{len(state['files_accessed'])}"
+                    extracted = {key: output_content[:1500]}
+            
             tool_msg = HumanMessage(content=f"Tool '{action_name}' output:\n{output_content[:2000]}")
             
             return self._update_state(
                 state,
                 messages=[AIMessage(content=response.content), tool_msg],
                 file_accessed=file_accessed,
+                extracted_data=extracted,
                 error=result.message if not result.success else None,
             )
             
@@ -177,7 +213,12 @@ TIPS:
             )
     
     def _parse_action(self, response: str) -> dict:
-        """Parse LLM response into action dict."""
+        """Parse LLM response into action dict.
+        
+        Handles common LLM formatting issues like newlines in JSON strings.
+        """
+        import re
+        
         try:
             content = response.strip()
             if content.startswith("```"):
@@ -187,21 +228,44 @@ TIPS:
             start = content.find("{")
             end = content.rfind("}")
             if start != -1 and end != -1:
-                content = content[start:end+1]
-            
-            data = json.loads(content)
-            
-            # Validate action exists
-            if not data.get("action"):
-                # Default to exploration instead of done
-                return {
-                    "action": "os_list_dir", 
-                    "args": {"path": "."}
-                }
+                json_str = content[start:end+1]
                 
-            return data
-        except json.JSONDecodeError:
-            # On parse failure, explore instead of quitting
+                # Try to fix common JSON issues: newlines inside strings
+                # Replace actual newlines (not \n escape sequences) inside quoted strings
+                # This regex finds strings and replaces newlines within them
+                def fix_newlines(match):
+                    return match.group(0).replace('\n', '\\n').replace('\r', '')
+                
+                # Match JSON string values (simple approach)
+                json_str = re.sub(r'"[^"]*"', fix_newlines, json_str, flags=re.DOTALL)
+                
+                try:
+                    data = json.loads(json_str)
+                    
+                    # Validate action exists
+                    if not data.get("action"):
+                        return {"action": "os_list_dir", "args": {"path": "."}}
+                    
+                    return data
+                except json.JSONDecodeError:
+                    pass
+            
+            # Fallback: Try to detect "done" action via regex if JSON fails
+            if '"action"' in content and '"done"' in content.lower():
+                # Try to extract summary from the content
+                summary_match = re.search(r'"summary"\s*:\s*"([^"]+(?:\\.[^"]*)*)"', content)
+                if summary_match:
+                    summary = summary_match.group(1).replace('\\n', '\n')
+                    return {"action": "done", "args": {"summary": summary}}
+                else:
+                    # Just mark as done with generic message
+                    return {"action": "done", "args": {"summary": "Analysis completed."}}
+            
+            # Default to exploration
+            return {"action": "os_list_dir", "args": {"path": "."}}
+            
+        except Exception:
+            # On any parse failure, explore instead of quitting
             return {"action": "os_list_dir", "args": {"path": "."}}
 
 

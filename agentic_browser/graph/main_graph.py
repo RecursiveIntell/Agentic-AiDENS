@@ -15,6 +15,12 @@ from .agents.browser_agent import browser_agent_node
 from .agents.os_agent import os_agent_node
 from .agents.research_agent import research_agent_node
 from .agents.code_agent import code_agent_node
+from .agents.data_agent import data_agent_node
+from .agents.network_agent import network_agent_node
+from .agents.sysadmin_agent import sysadmin_agent_node
+from .agents.media_agent import media_agent_node
+from .agents.package_agent import package_agent_node
+from .agents.automation_agent import automation_agent_node
 
 
 def build_agent_graph(checkpointer: MemorySaver | None = None):
@@ -26,6 +32,11 @@ def build_agent_graph(checkpointer: MemorySaver | None = None):
     - os: Filesystem/shell agent
     - research: Multi-source research agent
     - code: Code analysis agent
+    - data: Data transformation agent
+    - network: Network diagnostics agent
+    - sysadmin: System administration agent
+    - media: Media processing agent
+    - package: Package & dev environment agent
     
     Args:
         checkpointer: Optional memory saver for persistence
@@ -36,12 +47,20 @@ def build_agent_graph(checkpointer: MemorySaver | None = None):
     # Create the graph
     graph = StateGraph(AgentState)
     
-    # Add nodes
+    # Add nodes - original agents
     graph.add_node("supervisor", supervisor_node)
     graph.add_node("browser", browser_agent_node)
     graph.add_node("os", os_agent_node)
     graph.add_node("research", research_agent_node)
     graph.add_node("code", code_agent_node)
+    
+    # Add nodes - new agents
+    graph.add_node("data", data_agent_node)
+    graph.add_node("network", network_agent_node)
+    graph.add_node("sysadmin", sysadmin_agent_node)
+    graph.add_node("media", media_agent_node)
+    graph.add_node("package", package_agent_node)
+    graph.add_node("automation", automation_agent_node)
     
     # Set entry point
     graph.set_entry_point("supervisor")
@@ -55,6 +74,12 @@ def build_agent_graph(checkpointer: MemorySaver | None = None):
             "os": "os",
             "research": "research",
             "code": "code",
+            "data": "data",
+            "network": "network",
+            "sysadmin": "sysadmin",
+            "media": "media",
+            "package": "package",
+            "automation": "automation",
             "__end__": END,
         }
     )
@@ -66,10 +91,19 @@ def build_agent_graph(checkpointer: MemorySaver | None = None):
         return "supervisor"
     
     # Worker agents: return to supervisor OR end if task complete
+    # Original agents
     graph.add_conditional_edges("browser", check_task_complete, {"supervisor": "supervisor", "__end__": END})
     graph.add_conditional_edges("os", check_task_complete, {"supervisor": "supervisor", "__end__": END})
     graph.add_conditional_edges("research", check_task_complete, {"supervisor": "supervisor", "__end__": END})
     graph.add_conditional_edges("code", check_task_complete, {"supervisor": "supervisor", "__end__": END})
+    
+    # New agents
+    graph.add_conditional_edges("data", check_task_complete, {"supervisor": "supervisor", "__end__": END})
+    graph.add_conditional_edges("network", check_task_complete, {"supervisor": "supervisor", "__end__": END})
+    graph.add_conditional_edges("sysadmin", check_task_complete, {"supervisor": "supervisor", "__end__": END})
+    graph.add_conditional_edges("media", check_task_complete, {"supervisor": "supervisor", "__end__": END})
+    graph.add_conditional_edges("package", check_task_complete, {"supervisor": "supervisor", "__end__": END})
+    graph.add_conditional_edges("automation", check_task_complete, {"supervisor": "supervisor", "__end__": END})
     
     # Compile with optional checkpointer
     if checkpointer:
@@ -86,7 +120,7 @@ class MultiAgentRunner:
     def __init__(
         self,
         config,
-        browser_tools=None,
+        browser_manager=None,
         os_tools=None,
         enable_checkpointing: bool = False,
     ):
@@ -94,7 +128,7 @@ class MultiAgentRunner:
         
         Args:
             config: AgentConfig instance
-            browser_tools: Optional BrowserTools instance
+            browser_manager: Optional LazyBrowserManager for on-demand browser
             os_tools: Optional OSTools instance
             enable_checkpointing: Enable session persistence
         """
@@ -102,7 +136,7 @@ class MultiAgentRunner:
         from .tool_registry import ToolRegistry
         
         self.config = config
-        self.browser_tools = browser_tools
+        self.browser_manager = browser_manager
         self.os_tools = os_tools
         self.enable_checkpointing = enable_checkpointing
         
@@ -112,7 +146,7 @@ class MultiAgentRunner:
         self._registry.register(
             self.session_id,
             config=config,
-            browser_tools=browser_tools,
+            browser_manager=browser_manager,
             os_tools=os_tools,
         )
         
@@ -120,10 +154,10 @@ class MultiAgentRunner:
         checkpointer = MemorySaver() if enable_checkpointing else None
         self.graph = build_agent_graph(checkpointer)
     
-    def set_browser_tools(self, browser_tools) -> None:
-        """Set browser tools after initialization."""
-        self.browser_tools = browser_tools
-        self._registry.update_browser_tools(self.session_id, browser_tools)
+    def set_browser_manager(self, browser_manager) -> None:
+        """Set browser manager after initialization."""
+        self.browser_manager = browser_manager
+        self._registry.update_browser_manager(self.session_id, browser_manager)
     
     def set_os_tools(self, os_tools) -> None:
         """Set OS tools after initialization."""
