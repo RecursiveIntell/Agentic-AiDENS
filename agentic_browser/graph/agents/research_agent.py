@@ -195,7 +195,7 @@ Action: {"action": "done", "args": {"summary": "## Research Report\\n\\n[Your de
             action_hint = "Continue research."
         
         # Minimum sources required for completion
-        MIN_SOURCES_REQUIRED = 5
+        MIN_SOURCES_REQUIRED = 3
         
         # Calculate progress
         sources_extracted = len([k for k in state['extracted_data'].keys() if 'research_source' in k or 'browser_extract' in k])
@@ -279,7 +279,7 @@ Data collected:
                     if 'research_source' in k
                 ])
                 
-                MIN_SOURCES = 5
+                MIN_SOURCES = 3
                 
                 if research_source_count < MIN_SOURCES:
                     # Force extraction instead of allowing premature completion
