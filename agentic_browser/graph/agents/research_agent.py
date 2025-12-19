@@ -249,6 +249,27 @@ Data collected:
             
             extracted = None
             if action_data.get("action") == "extract_visible_text" and result.success:
+                # Get current URL to check if we're on a search engine
+                try:
+                    page_state = self._browser_tools.get_page_state()
+                    current_url = page_state.get('url', '')
+                except:
+                    current_url = ''
+                
+                # DON'T save content from search engine pages
+                search_engines = ['duckduckgo.com', 'google.com/search', 'bing.com/search', 'yahoo.com/search']
+                is_search_page = any(se in current_url.lower() for se in search_engines)
+                
+                if is_search_page:
+                    # This is a search results page - don't save as research source
+                    # Just return the content for the agent to process and click a result
+                    tool_msg = HumanMessage(content=f"Search results extracted. Now click on a relevant result link to get actual content.")
+                    return self._update_state(
+                        state,
+                        messages=[AIMessage(content=response.content), tool_msg],
+                        visited_url=visited,
+                    )
+                
                 # Get content
                 content_str = ""
                 if isinstance(result.data, dict):
@@ -272,6 +293,21 @@ Data collected:
                         state,
                         messages=[AIMessage(content="Low quality content (paywall/error), trying another source")],
                         error="Content blocked or inaccessible, try another URL",
+                    )
+                
+                # Also filter out content that's just navigation menus
+                nav_junk_phrases = [
+                    "open menu all images", "shopping videos more news maps",
+                    "search assist duck.ai", "never tracks your searches",
+                    "main menu search", "contents hide", "toggle the table",
+                ]
+                is_nav_junk = any(phrase in lower_content for phrase in nav_junk_phrases)
+                
+                if is_nav_junk and len(content_str) < 800:
+                    return self._update_state(
+                        state,
+                        messages=[AIMessage(content="Page content appears to be navigation/UI only, try extracting from a content page")],
+                        error="No substantial content found, click a result link first",
                     )
                 
                 # Save good content
