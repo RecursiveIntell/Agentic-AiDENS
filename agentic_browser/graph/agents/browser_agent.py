@@ -99,6 +99,9 @@ Respond with JSON:
         Returns:
             Updated state with browser action results
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
         if not self._browser_tools:
             return self._update_state(
                 state,
@@ -107,10 +110,26 @@ Respond with JSON:
         
         # Build context from current page state
         page_state = self._get_page_state()
+        current_url = page_state.get('url', 'about:blank')
+        
+        # Detect if we're on an images page - give strong hint to download
+        is_images_page = any(x in current_url.lower() for x in [
+            '/images', 'images.', 'pixabay', 'pexels', 'unsplash', 
+            'image', 'photo', 'pic', 'jpg', 'png'
+        ])
+        
+        image_download_hint = ""
+        if is_images_page:
+            image_download_hint = """
+⚠️ YOU ARE ON AN IMAGES PAGE! If the goal is to download an image:
+- Call download_image with NO arguments to auto-download the largest image
+- Example: {"action": "download_image", "args": {}}
+"""
+        
         task_context = f"""
-Current URL: {page_state.get('url', 'about:blank')}
+Current URL: {current_url}
 Page Title: {page_state.get('title', '')}
-
+{image_download_hint}
 Visible Text (truncated):
 {page_state.get('visible_text', '')[:2000]}
 
@@ -128,6 +147,12 @@ Your task: {state['goal']}
         try:
             response = self.safe_invoke(messages)
             action_data = self._parse_action(response.content)
+            
+            # Log the action for debugging
+            action = action_data.get("action", "unknown")
+            args = action_data.get("args", {})
+            logger.debug(f"Browser agent action: {action} with args: {args}")
+            print(f"[BROWSER] Action: {action}, Args: {args}")  # Visible debug output
             
             if action_data.get("action") == "done":
                 # Store findings but DON'T mark task_complete - let supervisor decide
@@ -158,6 +183,17 @@ Your task: {state['goal']}
                     content_str = str(result.data) if result.data else str(result.message)
                     
                 extracted = {key: content_str[:2000]}
+            
+            # Handle download_image results - store download path
+            if action_data.get("action") == "download_image" and result.success:
+                download_path = result.data.get("path", "") if result.data else ""
+                filename = result.data.get("filename", "") if result.data else ""
+                extracted = {
+                    "downloaded_image": download_path,
+                    "image_filename": filename,
+                }
+                # Log success
+                print(f"[BROWSER] Downloaded image to: {download_path}")
                 
             # Create tool output message so agent knows result
             tool_content = str(result.message) if result.message else "Action successful"
