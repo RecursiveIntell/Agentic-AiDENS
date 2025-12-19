@@ -312,11 +312,16 @@ Data collected:
                     )
             
             # If there are recent failed clicks, force scroll to find real links
-            # Check last 3 messages for click failure patterns
+            # Check last 3 messages for click failure patterns AND check error field
             recent_msgs = state.get('messages', [])[-6:]  # Last 3 pairs of messages
             recent_fails = sum(1 for m in recent_msgs if hasattr(m, 'content') and 'Could not click' in str(m.content))
-            if recent_fails >= 2 and action_data.get("action") == "click":
-                print(f"[RESEARCH] ⚠️ {recent_fails} recent click failures - forcing scroll to find real links")
+            # Also check if current state has a click error
+            current_error = state.get('error', '') or ''
+            if 'Could not click' in current_error:
+                recent_fails += 1
+                
+            if recent_fails >= 1 and action_data.get("action") == "click":
+                print(f"[RESEARCH] ⚠️ {recent_fails} recent click failure(s) - forcing scroll to find real links")
                 action_data = {"action": "scroll", "args": {"amount": 800}}
             
             # Detect duplicate click and force scroll instead

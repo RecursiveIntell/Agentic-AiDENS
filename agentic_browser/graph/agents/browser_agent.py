@@ -286,6 +286,14 @@ Your task: {state['goal']}
             
             tool_msg = HumanMessage(content=f"Tool output: {tool_content}")
             
+            # Track clicked selectors (share with research agent)
+            existing_clicked = list(state.get('clicked_selectors', []))
+            if action_data.get("action") == "click":
+                selector = action_data.get("args", {}).get("selector", "")
+                if selector and selector not in existing_clicked:
+                    print(f"[BROWSER DEBUG] Click {'successful' if result.success else 'FAILED'}, tracking selector: {selector[:50]}...")
+                    existing_clicked.append(selector)
+            
             # Build updated state with loop tracking
             new_state = self._update_state(
                 state,
@@ -294,6 +302,9 @@ Your task: {state['goal']}
                 extracted_data=extracted,
                 error=result.message if not result.success else None,
             )
+            
+            # Set the updated clicked selectors list
+            new_state['clicked_selectors'] = existing_clicked
             
             # Persist recent actions for loop detection
             new_state["_recent_actions"] = recent_actions
