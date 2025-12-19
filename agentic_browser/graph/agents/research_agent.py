@@ -209,15 +209,23 @@ Action: {"action": "done", "args": {"summary": "## Research Report\\n\\n[Your de
         
         # Track clicked link selectors to avoid re-clicking
         clicked_selectors = state.get('clicked_selectors', [])
-        print(f"[RESEARCH DEBUG] clicked_selectors in state: {clicked_selectors}")
         
-        # Format clicked links warning
-        if clicked_selectors:
+        # Deduplicate for display (operator.add can create duplicates)
+        unique_clicked = list(dict.fromkeys(clicked_selectors))  # Preserves order
+        print(f"[RESEARCH DEBUG] clicked_selectors in state: {len(clicked_selectors)} total, {len(unique_clicked)} unique")
+        
+        # Format clicked links warning with deduped list
+        if unique_clicked:
             clicked_warning = f"""
-⛔ ALREADY CLICKED - DO NOT CLICK THESE AGAIN:
-{chr(10).join(f'  - {sel}' for sel in clicked_selectors[-10:])}
+⛔ ALREADY CLICKED ({len(unique_clicked)} unique links) - DO NOT CLICK THESE AGAIN:
+{chr(10).join(f'  - {sel}' for sel in unique_clicked[-10:])}
 
-You MUST click a DIFFERENT link from the search results!
+You MUST click a DIFFERENT link or SCROLL DOWN to find more results!
+"""
+            # If already clicked 2+ unique links, strongly suggest scroll
+            if len(unique_clicked) >= 2:
+                clicked_warning += """
+🔽 **SCROLL DOWN to find more search results!** Use: {"action": "scroll", "args": {"direction": "down"}}
 """
         else:
             clicked_warning = ""
@@ -278,6 +286,16 @@ Data collected:
                         final_answer=summary,
                         extracted_data={"research_findings": summary},
                     )
+            
+            # Detect duplicate click and force scroll instead
+            if action_data.get("action") == "click":
+                selector = action_data.get("args", {}).get("selector", "")
+                clicked_selectors = state.get('clicked_selectors', [])
+                unique_clicked = list(dict.fromkeys(clicked_selectors))
+                
+                if selector in unique_clicked:
+                    print(f"[RESEARCH] 🔄 Duplicate click detected: {selector[:50]}... - forcing scroll instead")
+                    action_data = {"action": "scroll", "args": {"direction": "down"}}
             
             # Execute browser action
             result = self._browser_tools.execute(
