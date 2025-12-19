@@ -159,8 +159,15 @@ Content:
 
 Summary:"""
             
-            response = self.llm.invoke([HumanMessage(content=summary_prompt)])
-            summary = response.content.strip()
+            try:
+                response = self.llm.invoke([HumanMessage(content=summary_prompt)])
+                if response is None or not response.content:
+                    return visible_text[:500] + "..."
+                summary = response.content.strip()
+            except Exception as e:
+                # Handle empty response or other LLM errors
+                print(f"[WARN] Summary LLM error: {e}")
+                return visible_text[:500] + "..."
             
             # Cache the summary
             self.page_summaries[url] = summary
@@ -304,8 +311,24 @@ Next action? JSON only."""
         for attempt in range(max_retries + 1):
             try:
                 # Get response from LLM
-                response = self.llm.invoke(messages)
-                response_content = response.content
+                try:
+                    response = self.llm.invoke(messages)
+                    if response is None or not response.content:
+                        raise ValueError("Empty response from model")
+                    response_content = response.content
+                except Exception as llm_error:
+                    error_msg = str(llm_error).lower()
+                    if "empty" in error_msg or "must contain" in error_msg:
+                        # Return a fallback done action
+                        return ActionResponse(
+                            action="done",
+                            args={},
+                            rationale="Model returned empty response",
+                            risk="low",
+                            requires_approval=False,
+                            final_answer="Model error - please try again"
+                        )
+                    raise
                 
                 # Parse the response
                 action_response = self._parse_response(response_content)

@@ -191,7 +191,7 @@ Data collected:
         messages = self._build_messages(state, task_context)
         
         try:
-            response = self.llm.invoke(messages)
+            response = self.safe_invoke(messages)
             action_data = self._parse_action(response.content)
             
             if action_data.get("action") == "done":
