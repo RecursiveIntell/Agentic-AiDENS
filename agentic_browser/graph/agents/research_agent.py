@@ -391,9 +391,11 @@ Data collected:
                 
                 if is_low_quality and len(content_str) < 500:
                     # Low quality content - note but don't save
+                    # IMPORTANT: Mark URL as visited to prevent auto-extract loop on CAPTCHA pages
                     return self._update_state(
                         state,
-                        messages=[AIMessage(content="Low quality content (paywall/error), trying another source")],
+                        messages=[AIMessage(content=f"Low quality content (CAPTCHA/paywall) at {current_url[:50]}..., skipping this source")],
+                        visited_url=current_url,  # Mark as visited to break auto-extract loop
                         error="Content blocked or inaccessible, try another URL",
                     )
                 
@@ -409,6 +411,7 @@ Data collected:
                     return self._update_state(
                         state,
                         messages=[AIMessage(content="Page content appears to be navigation/UI only, try extracting from a content page")],
+                        visited_url=current_url,  # Mark as visited to prevent loops
                         error="No substantial content found, click a result link first",
                     )
                 
