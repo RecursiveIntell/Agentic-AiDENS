@@ -297,6 +297,26 @@ Data collected:
                     print(f"[RESEARCH] 🔄 Duplicate click detected: {selector[:50]}... - forcing scroll instead")
                     action_data = {"action": "scroll", "args": {"amount": 800}}
             
+            # Auto-extract before going back if on a content page
+            if action_data.get("action") == "back":
+                try:
+                    page_state_now = self._browser_tools.get_page_state()
+                    current_url_now = page_state_now.get('current_url', '') or page_state_now.get('url', '')
+                    is_search_page = any(se in current_url_now.lower() for se in ['duckduckgo.com', 'google.com/search', 'bing.com/search'])
+                    
+                    if current_url_now and not is_search_page and current_url_now != 'about:blank':
+                        # Check if we already saved this URL's content
+                        already_extracted = any(
+                            current_url_now.split('?')[0].rstrip('/') in str(v) 
+                            for v in state['extracted_data'].values()
+                        )
+                        if not already_extracted:
+                            print(f"[RESEARCH] 📦 Auto-extracting content before going back from: {current_url_now[:50]}...")
+                            # Force extract first
+                            action_data = {"action": "extract_visible_text", "args": {"max_chars": 8000}}
+                except Exception as e:
+                    print(f"[RESEARCH] Warning: auto-extract check failed: {e}")
+            
             # Execute browser action
             result = self._browser_tools.execute(
                 action_data.get("action", ""),
