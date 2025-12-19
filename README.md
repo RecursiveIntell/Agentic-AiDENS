@@ -164,11 +164,23 @@ Actions are classified by risk level:
 
 ## 📈 Recent Updates
 
-- **6 New Agents**: Data, Network, SysAdmin, Media, Package, Automation
-- **Improved Research**: URL deduplication, paywall detection
-- **Robust LLM Handling**: Exponential backoff, dynamic token limits
-- **Better GUI**: Improved final answer parsing and display
-- **Resource Cleanup**: atexit handlers for browser cleanup
+### Safety & Reliability (v0.3.0)
+- **Typed Tool Schemas**: All OS/browser actions now use Pydantic validation - no more raw shell strings
+- **Policy Engine**: Hard denylist for dangerous commands (`rm -rf /`, fork bombs), dry-run mode
+- **Structured Memory Store**: JSON-backed storage for known sites, directories, and recipes with PII redaction
+- **Logging Framework**: Debug prints replaced with `logging` module (enable with `AGENTIC_BROWSER_DEBUG=1`)
+
+### Agent Improvements
+- **Smart Routing**: Supervisor correctly routes to all 10+ agent types (sysadmin, network, etc.)
+- **Research Quality**: Increased minimum sources to 5, better instruction following
+- **Dynamic Paths**: OS agent uses `Path.home()` instead of hardcoded paths
+- **o3 Model Support**: Fixed empty response issues with OpenAI reasoning models
+
+### CLI Features
+- `agentic-browser memory --show`: View stored sites/directories/recipes
+- `agentic-browser memory --bootstrap`: Pre-seed common directories
+- `agentic-browser --dry-run`: See planned actions without execution
+- `agentic-browser --explain`: Show risk analysis for commands
 
 ## 📄 License
 

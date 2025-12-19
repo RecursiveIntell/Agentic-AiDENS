@@ -89,6 +89,11 @@ class AgentConfig:
     # GUI IPC mode for approval dialogs
     gui_ipc: bool = False
     
+    # Debug mode - enables verbose logging (off by default)
+    debug: bool = field(
+        default_factory=lambda: os.getenv("AGENTIC_BROWSER_DEBUG", "").lower() in ("1", "true", "yes")
+    )
+    
     # Domain routing settings
     routing_mode: str = "auto"  # auto | browser | os | ask
     

@@ -11,6 +11,8 @@ from typing import Any
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
 from langchain_openai import ChatOpenAI
 
+logger = logging.getLogger("agentic_browser.agents")
+
 # Lazy import for optional providers to avoid import errors if not installed
 def _get_anthropic_client():
     try:
@@ -86,8 +88,13 @@ def create_llm_client(config: AgentConfig, max_tokens: int = 1000):
             "max_tokens": max_tokens,
         }
         
-        # Only add temperature for models that support it
-        if not is_reasoning_model:
+        # O-series reasoning models (o1, o3, o4) require special handling:
+        # - They require temperature=1 (not None, not omitted)
+        # - They need higher max_tokens for reasoning
+        if is_reasoning_model:
+            llm_kwargs["temperature"] = 1  # o-series REQUIRES temperature=1
+            llm_kwargs["max_tokens"] = max(max_tokens, 16384)  # Higher limit for reasoning
+        else:
             llm_kwargs["temperature"] = 0.1
         
         return ChatOpenAI(**llm_kwargs)

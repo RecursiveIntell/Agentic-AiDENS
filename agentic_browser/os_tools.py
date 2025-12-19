@@ -8,11 +8,19 @@ import os
 import re
 import shlex
 import subprocess
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from .config import AgentConfig
+from .tool_schemas import (
+    RunCommandRequest,
+    ListDirRequest,
+    ReadFileRequest,
+    WriteFileRequest,
+    validate_action_args,
+)
 
 
 @dataclass
@@ -91,11 +99,13 @@ class OSTools:
         self.sandbox_dir.mkdir(parents=True, exist_ok=True)
     
     def execute(self, action: str, args: dict[str, Any]) -> ToolResult:
-        """Execute an OS action.
+        """Execute an OS action (legacy interface).
+        
+        DEPRECATED: Use execute_typed() with Pydantic models instead.
         
         Args:
             action: Action name (os_exec, os_list_dir, os_read_file, os_write_file)
-            args: Action arguments
+            args: Action arguments (raw dict)
             
         Returns:
             ToolResult with success status and message
@@ -122,25 +132,153 @@ class OSTools:
                 message=f"Error executing {action}: {str(e)}",
             )
     
+    def execute_typed(
+        self,
+        request: Union[RunCommandRequest, ListDirRequest, ReadFileRequest, WriteFileRequest],
+    ) -> ToolResult:
+        """Execute an OS action with typed request (PREFERRED).
+        
+        This is the preferred method for executing OS actions.
+        Uses Pydantic models for type safety and validation.
+        
+        Args:
+            request: Typed request object
+            
+        Returns:
+            ToolResult with success status and message
+        """
+        if isinstance(request, RunCommandRequest):
+            return self._exec_typed(request)
+        elif isinstance(request, ListDirRequest):
+            return self._list_dir({"path": request.path})
+        elif isinstance(request, ReadFileRequest):
+            return self._read_file({"path": request.path, "max_bytes": request.max_bytes})
+        elif isinstance(request, WriteFileRequest):
+            return self._write_file({
+                "path": request.path,
+                "content": request.content,
+                "mode": request.mode,
+            })
+        else:
+            return ToolResult(
+                success=False,
+                message=f"Unknown request type: {type(request).__name__}",
+            )
+    
+    def _exec_typed(self, request: RunCommandRequest) -> ToolResult:
+        """Execute a command from typed request (argv list).
+        
+        Args:
+            request: Typed RunCommandRequest with argv list
+            
+        Returns:
+            ToolResult with stdout/stderr
+        """
+        timeout_s = min(request.timeout_s, self.MAX_TIMEOUT_S)
+        
+        cwd = request.cwd
+        if cwd:
+            cwd_path = Path(cwd).resolve()
+            if not cwd_path.exists():
+                return ToolResult(
+                    success=False,
+                    message=f"Working directory does not exist: {cwd}",
+                )
+        else:
+            cwd_path = self.sandbox_dir
+        
+        try:
+            result = subprocess.run(
+                request.argv,
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+                cwd=str(cwd_path),
+                env={**os.environ, "LC_ALL": "C"},
+            )
+            
+            stdout = self._truncate_output(result.stdout)
+            stderr = self._truncate_output(result.stderr)
+            
+            output_parts = []
+            if stdout:
+                output_parts.append(f"STDOUT:\n{stdout}")
+            if stderr:
+                output_parts.append(f"STDERR:\n{stderr}")
+            
+            output = "\n\n".join(output_parts) if output_parts else "(no output)"
+            
+            return ToolResult(
+                success=result.returncode == 0,
+                message=f"Command {'succeeded' if result.returncode == 0 else 'failed'} (exit code {result.returncode})",
+                data={
+                    "returncode": result.returncode,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "output": output,
+                    "argv": request.argv,
+                },
+            )
+            
+        except subprocess.TimeoutExpired:
+            return ToolResult(
+                success=False,
+                message=f"Command timed out after {timeout_s} seconds",
+            )
+        except FileNotFoundError:
+            return ToolResult(
+                success=False,
+                message=f"Command not found: {request.argv[0]}",
+            )
+        except PermissionError:
+            return ToolResult(
+                success=False,
+                message=f"Permission denied executing: {request.argv[0]}",
+            )
+    
     def _exec(self, args: dict[str, Any]) -> ToolResult:
-        """Execute a shell command.
+        """Execute a shell command (legacy method).
+        
+        DEPRECATED: Use execute_typed() with RunCommandRequest instead.
+        
+        Supports both legacy "cmd" string and new "argv" list formats.
+        If both are provided, "argv" takes precedence.
         
         Args:
             args: {
-                "cmd": "command string",
-                "timeout_s": 30,  # optional
-                "cwd": "/path"    # optional
+                "argv": ["ls", "-la"],  # PREFERRED: list of args
+                "cmd": "command string",  # DEPRECATED: shell string
+                "timeout_s": 30,
+                "cwd": "/path"
             }
             
         Returns:
             ToolResult with stdout/stderr
         """
+        # Prefer argv list if provided
+        argv = args.get("argv")
+        if argv and isinstance(argv, list):
+            request = RunCommandRequest(
+                argv=argv,
+                cwd=args.get("cwd"),
+                timeout_s=args.get("timeout_s", self.DEFAULT_TIMEOUT_S),
+            )
+            return self._exec_typed(request)
+        
+        # Fall back to legacy cmd string (deprecated)
         cmd = args.get("cmd")
         if not cmd:
             return ToolResult(
                 success=False,
-                message="Missing required argument: cmd",
+                message="Missing required argument: cmd or argv",
             )
+        
+        # Emit deprecation warning for shell strings
+        warnings.warn(
+            "Using 'cmd' shell string is deprecated. Use 'argv' list instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         
         timeout_s = min(
             args.get("timeout_s", self.DEFAULT_TIMEOUT_S),

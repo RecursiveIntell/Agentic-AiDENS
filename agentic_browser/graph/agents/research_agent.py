@@ -37,19 +37,26 @@ SEARCH WORKFLOW:
 1. Construct search URL: "https://duckduckgo.com/?q=your+query"
 2. Navigate directly to it using "goto"
 3. Extract search results to find real URLs (do not guess!)
-4. Visit 1-3 actual websites from search results
+4. Visit 3-5 actual websites from search results
 5. Synthesize findings into a comprehensive report
 
+CRITICAL: FOLLOW USER'S EXACT REQUIREMENTS
+- If user asks for "10 examples", find 10+ examples
+- If user asks to "compare X vs Y", provide actual comparisons
+- If user asks for specific data, gather that specific data
+- Do NOT give generic summaries - give SPECIFIC named examples with details
+
 ADAPTIVE DEPTH:
-- SIMPLE query ("what is X?"): 1 search, 1-2 sites, quick summary
-- COMPLEX query ("compare A vs B"): multiple searches, more sites, detailed comparison
+- SIMPLE query ("what is X?"): 1 search, 2-3 sites, quick summary
+- COMPLEX query ("research 10 X"): multiple searches, 5+ sites, comprehensive list
+- COUNT REQUIREMENTS: If user specifies a number, YOU MUST meet that number
 
 CRITICAL RULES:
 1. ALWAYS start with DuckDuckGo - don't make up URLs!
 2. Only visit URLs you actually see in search results
 3. If a site fails (ERR_NAME_NOT_RESOLVED, 404), skip it and try another
-4. STOP AFTER 3 SOURCES: If you have info from 3 sites, YOU MUST CALL DONE.
-5. Do not search endlessly. 3 good sources is success.
+4. STOP AFTER 5 SOURCES: If you have info from 5 sites, YOU MUST CALL DONE.
+5. YOUR SUMMARY MUST MATCH THE USER'S REQUEST - count the items!
 
 ERROR RECOVERY:
 - If research stalls, synthesize what you have and call "done"
@@ -201,7 +208,7 @@ Data collected:
                     if 'research_source' in k
                 ])
                 
-                MIN_SOURCES = 3
+                MIN_SOURCES = 5
                 
                 if research_source_count < MIN_SOURCES:
                     # Force extraction instead of allowing premature completion

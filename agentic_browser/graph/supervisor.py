@@ -5,6 +5,7 @@ Routes tasks to appropriate agents and synthesizes results.
 """
 
 import json
+import logging
 from typing import Literal
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -13,6 +14,8 @@ from langchain_openai import ChatOpenAI
 from .state import AgentState
 from ..domain_router import DomainRouter
 from ..config import AgentConfig
+
+logger = logging.getLogger("agentic_browser.supervisor")
 
 
 class Supervisor:
@@ -204,10 +207,10 @@ When completing, synthesize ALL gathered data into a useful report:
             print(f"\n{'='*60}")
             print(f"[DEBUG] Supervisor - Raw LLM Response:")
             print(f"{'='*60}")
-            print(response.content[:1000] if len(response.content) > 1000 else response.content)
+            logger.debug(response.content[:1000] if len(response.content) > 1000 else response.content)
             print(f"{'='*60}\n")
             
-            decision = self._parse_decision(response.content)
+            decision = self._parse_decision(response.content, state.get("current_domain", "research"))
             
             # DEBUG: Print parsed decision
             print(f"[DEBUG] Supervisor - Parsed Decision: {decision}")
@@ -244,11 +247,24 @@ When completing, synthesize ALL gathered data into a useful report:
             if decision.get("route_to") == "done":
                 if state["step_count"] < MIN_STEPS_BEFORE_DONE:
                     print(f"[DEBUG] Supervisor - BLOCKED 'done': step_count ({state['step_count']}) < MIN_STEPS ({MIN_STEPS_BEFORE_DONE})")
-                    # Force continue with code agent to gather more data
-                    decision = {"route_to": "code", "rationale": "Need more exploration before completing"}
+                    # Determine which agent to use based on goal
+                    goal_lower = state['goal'].lower()
+                    is_research_goal = any(kw in goal_lower for kw in [
+                        'look up', 'research', 'find out', 'search', 'what is', 
+                        'who is', 'give me', 'report', 'summarize', 'anime', 'movie'
+                    ])
+                    fallback_agent = "research" if is_research_goal else "code"
+                    decision = {"route_to": fallback_agent, "rationale": "Need more exploration before completing"}
                 elif not state['extracted_data'] or len(state['extracted_data']) == 0:
                     print(f"[DEBUG] Supervisor - BLOCKED 'done': No extracted_data yet")
-                    decision = {"route_to": "code", "rationale": "No data collected yet"}
+                    # Same logic - use research for research goals
+                    goal_lower = state['goal'].lower()
+                    is_research_goal = any(kw in goal_lower for kw in [
+                        'look up', 'research', 'find out', 'search', 'what is',
+                        'who is', 'give me', 'report', 'summarize', 'anime', 'movie'
+                    ])
+                    fallback_agent = "research" if is_research_goal else "code"
+                    decision = {"route_to": fallback_agent, "rationale": "No data collected yet"}
             
             if decision.get("route_to") == "done":
                 return {
@@ -408,22 +424,27 @@ If the worker agent completed with a final answer, synthesize and return done.
             formatted.append(f"- {type(msg).__name__}: {content}")
         return "\n".join(formatted) or "(no messages)"
     
-    def _parse_decision(self, response: str) -> dict:
-        """Parse supervisor decision from response."""
+    def _parse_decision(self, response: str, current_domain: str = "research") -> dict:
+        """Parse supervisor decision from response.
+        
+        Args:
+            response: LLM response to parse
+            current_domain: Current active domain to fallback to on parse failure
+        """
         try:
             content = response.strip()
             if not content:
-                print("[DEBUG] Supervisor - Empty response, continuing with code agent")
-                return {"route_to": "code", "rationale": "Empty LLM response, continuing exploration"}
+                logger.debug(f"Supervisor - Empty response, continuing with {current_domain} agent")
+                return {"route_to": current_domain, "rationale": "Empty LLM response, continuing exploration"}
             start = content.find("{")
             end = content.rfind("}")
             if start != -1 and end != -1:
                 content = content[start:end+1]
             return json.loads(content)
         except json.JSONDecodeError:
-            # On parse failure, continue exploration instead of quitting
-            print("[DEBUG] Supervisor - JSON parse failed, continuing with code agent")
-            return {"route_to": "code", "rationale": "Failed to parse response"}
+            # On parse failure, continue with current agent instead of switching to code
+            logger.debug(f"Supervisor - JSON parse failed, continuing with {current_domain} agent")
+            return {"route_to": current_domain, "rationale": "Failed to parse response"}
     
     def _map_domain(self, domain: str) -> str:
         """Map DomainRouter domain to agent names."""
@@ -452,10 +473,29 @@ If the worker agent completed with a final answer, synthesize and return done.
         def clean_content(text: str, max_len: int = 500) -> str:
             """Clean up webpage content for display."""
             text = str(text)
-            # Remove common webpage navigation junk
-            for noise in ["Main menu", "Jump to content", "Toggle the table", 
-                         "Contents hide", "Create account", "Log in", "Personal tools"]:
-                text = text.replace(noise, "")
+            # Remove DuckDuckGo and search engine noise
+            noise_patterns = [
+                "Main menu", "Jump to content", "Toggle the table",
+                "Contents hide", "Create account", "Log in", "Personal tools",
+                "All Images Videos News Maps Shopping",
+                "DuckDuckGo Protection. Privacy. Peace of mind.",
+                "DuckDuckGo never tracks your searches",
+                "Search Assist Duck.ai Search Settings",
+                "Protected DuckDuckGo protects", "Learn More You can hide this",
+                "reminder in Search Settings All regions",
+                "Open menu All Images Videos News Maps Shopping Search Assist",
+                "Never tracks your searches", "Search Settings", "All regions",
+                "Argentina Australia", "Belgium Brazil Bulgaria Canada",
+                "Chile China Colombia", "France Germany Greece",
+                "Media subscription Light novel Volumes Manga Volumes Anime Episodes",
+                "References External links", "Categories:",
+                "This Thursday , we ask you to join the 2%",
+                "gave just $2.75", "donate", "Donate",
+                "Wikipedia", "From Wikipedia, the free encyclopedia",
+                "Sorry to interrupt, but we're short on time",
+            ]
+            for noise in noise_patterns:
+                text = text.replace(noise, " ")
             # Clean up whitespace
             text = ' '.join(text.split())
             return text[:max_len]
@@ -535,7 +575,10 @@ def supervisor_node(state: AgentState) -> AgentState:
     return supervisor.route(state)
 
 
-def route_to_agent(state: AgentState) -> Literal["browser", "os", "research", "code", "__end__"]:
+def route_to_agent(state: AgentState) -> Literal[
+    "browser", "os", "research", "code", "sysadmin", 
+    "network", "media", "package", "automation", "data", "__end__"
+]:
     """Conditional edge function for routing.
     
     Returns the name of the next node based on current_domain.
@@ -545,8 +588,22 @@ def route_to_agent(state: AgentState) -> Literal["browser", "os", "research", "c
     if domain == "done" or state.get("task_complete"):
         return "__end__"
     
-    if domain in ("browser", "os", "research", "code"):
+    # All valid agent routes
+    valid_agents = {
+        "browser", "os", "research", "code", "sysadmin",
+        "network", "media", "package", "automation", "data"
+    }
+    
+    if domain in valid_agents:
         return domain
     
-    # Default to browser
+    # Determine smart default based on goal
+    goal = state.get("goal", "").lower()
+    
+    # OS-oriented keywords → don't open browser
+    os_keywords = ["file", "memory", "disk", "cpu", "process", "service", "list", "run"]
+    if any(kw in goal for kw in os_keywords):
+        return "os"
+    
+    # Web-oriented → browser
     return "browser"

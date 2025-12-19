@@ -20,21 +20,21 @@ class TestOSToolsExec:
     
     def test_exec_simple_command(self, tools):
         """Test executing a simple command."""
-        result = tools.execute("os_exec", {"cmd": "echo hello"})
+        result = tools.execute("os_exec", {"argv": ["echo", "hello"]})
         
         assert result.success is True
         assert "hello" in result.data["stdout"]
     
     def test_exec_missing_cmd(self, tools):
-        """Test error when cmd is missing."""
+        """Test error when argv/cmd is missing."""
         result = tools.execute("os_exec", {})
         
         assert result.success is False
-        assert "missing" in result.message.lower()
+        assert "missing" in result.message.lower() or "argv" in result.message.lower()
     
     def test_exec_command_not_found(self, tools):
         """Test error when command doesn't exist."""
-        result = tools.execute("os_exec", {"cmd": "nonexistent_command_xyz"})
+        result = tools.execute("os_exec", {"argv": ["nonexistent_command_xyz"]})
         
         assert result.success is False
         assert "not found" in result.message.lower()
@@ -46,29 +46,30 @@ class TestOSToolsExec:
         
         with patch("agentic_browser.os_tools.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired("cmd", 30)
-            result = tools.execute("os_exec", {"cmd": "sleep 100", "timeout_s": 1})
+            result = tools.execute("os_exec", {"argv": ["sleep", "100"], "timeout_s": 1})
         
         assert result.success is False
         assert "timed out" in result.message.lower() or "timeout" in result.message.lower()
     
     def test_exec_respects_max_timeout(self, tools):
-        """Test that timeout is capped at MAX_TIMEOUT_S."""
-        # Request a very long timeout
-        result = tools.execute("os_exec", {"cmd": "echo test", "timeout_s": 9999})
+        """Test that excessive timeout is rejected by typed schema."""
+        # Request a very long timeout - should fail validation
+        result = tools.execute("os_exec", {"argv": ["echo", "test"], "timeout_s": 9999})
         
-        # Should still work (uses capped timeout internally)
-        assert result.success is True
+        # With typed schemas, this now fails validation rather than silently capping
+        assert result.success is False
+        assert "timeout" in result.message.lower() or "validation" in result.message.lower()
     
     def test_exec_custom_cwd(self, tools, tmp_path):
         """Test executing in custom working directory."""
-        result = tools.execute("os_exec", {"cmd": "pwd", "cwd": str(tmp_path)})
+        result = tools.execute("os_exec", {"argv": ["pwd"], "cwd": str(tmp_path)})
         
         assert result.success is True
         assert str(tmp_path) in result.data["stdout"]
     
     def test_exec_nonexistent_cwd(self, tools):
         """Test error when cwd doesn't exist."""
-        result = tools.execute("os_exec", {"cmd": "ls", "cwd": "/nonexistent/path"})
+        result = tools.execute("os_exec", {"argv": ["ls"], "cwd": "/nonexistent/path"})
         
         assert result.success is False
         assert "does not exist" in result.message

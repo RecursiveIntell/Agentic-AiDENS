@@ -22,6 +22,12 @@ All notable changes to this project will be documented in this file.
 
 - **Recovery action**: `get_recovery_action()` is now called on tool failures, with the LLM's recovery strategy merged into context. Added failed action tracking to prevent infinite retry loops.
 
+- **Graph OS agent no longer hardcodes home directory**: Replaced `/home/sikmindz` references with `Path.home()`. OS agent now uses current user's home directory on any system.
+
+- **AgentConfig instantiation fixed**: Fallback config in `os_agent_node()` now properly passes required `goal` from state instead of calling `AgentConfig()` with no arguments.
+
+- **Agent routing fixed**: `route_to_agent()` now includes all 10 agent types (sysadmin, network, etc.) instead of only 4, preventing incorrect fallback to browser agent.
+
 ### Added
 
 - New `adapters.py` module with `LLMAdapter` protocol and provider implementations
