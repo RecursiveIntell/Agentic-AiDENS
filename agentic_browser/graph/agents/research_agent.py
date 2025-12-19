@@ -185,12 +185,25 @@ Action: {"action": "done", "args": {"summary": "## Research Report\\n\\n[Your de
             action_hint = "Continue research."
         
         # Minimum sources required for completion
-        MIN_SOURCES_REQUIRED = 3
+        MIN_SOURCES_REQUIRED = 5
+        
+        # Calculate progress
+        sources_extracted = len([k for k in state['extracted_data'].keys() if 'research_source' in k or 'browser_extract' in k])
+        sources_needed = max(0, MIN_SOURCES_REQUIRED - sources_extracted)
+        
+        # Strong progress indicator
+        if sources_needed > 0:
+            progress_msg = f"⚠️ NEED {sources_needed} MORE SOURCES before you can call done!"
+        else:
+            progress_msg = "✅ You have enough sources. You may call done with a comprehensive summary."
         
         task_context = f"""
 RESEARCH TASK: {state['goal']}
 
-Sources visited: {sources_visited}/{MIN_SOURCES_REQUIRED} MINIMUM required
+=== PROGRESS ===
+Sources extracted: {sources_extracted}/{MIN_SOURCES_REQUIRED}
+{progress_msg}
+
 Visited URLs: {chr(10).join(state['visited_urls'][-5:]) or '(none)'}
 
 Current page: {page_state.get('title', 'Unknown')}

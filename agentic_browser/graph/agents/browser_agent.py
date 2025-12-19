@@ -29,18 +29,32 @@ class BrowserAgentNode(BaseAgent):
 
 You have access to these browser actions:
 - goto: { "url": "https://..." }
-- click: { "selector": "css or text selector" }
-- type: { "selector": "...", "text": "..." }
+- click: { "selector": "text=Link Text" }  # USE text= PREFIX FOR LINK TEXT!
+- type: { "selector": "input[name=q]", "text": "search query" }
 - press: { "key": "Enter|Tab|..." }
 - scroll: { "amount": 800 }
 - extract_visible_text: { "max_chars": 8000 }
 - done: { "summary": "what you accomplished" }
+
+=== CLICK SELECTOR FORMAT ===
+ALWAYS use the correct prefix for click selectors:
+- text=Link Text → Click link by visible text (MOST COMMON)
+- #elementId → Click by ID
+- .className → Click by class
+- button:has-text("Submit") → Click button with text
+
+EXAMPLES:
+✅ CORRECT: {"action": "click", "args": {"selector": "text=Read More"}}
+✅ CORRECT: {"action": "click", "args": {"selector": "text=r/artificial"}}
+❌ WRONG: {"action": "click", "args": {"selector": "r/artificial"}}
+❌ WRONG: {"action": "click", "args": {"selector": "Read More"}}
 
 CRITICAL RULES:
 1. ALWAYS use DuckDuckGo for search (https://duckduckgo.com) - Google blocks AI agents!
 2. Only use COMPLETE URLs starting with https://
 3. If you get a 404, move to the next site - don't retry
 4. After 3-5 actions, call "done" with what you found
+5. For clicking links, ALWAYS use text= prefix!
 
 Respond with JSON:
 {
@@ -209,9 +223,26 @@ Your task: {state['goal']}
             return {"action": "extract_visible_text", "args": {"max_chars": 5000}}
     
     def _execute_action(self, action_data: dict) -> ToolResult:
-        """Execute a browser action."""
+        """Execute a browser action with auto-fix for common selector issues."""
         action = action_data.get("action", "")
-        args = action_data.get("args", {})
+        args = action_data.get("args", {}).copy()  # Copy to avoid mutating original
+        
+        # Auto-fix click selectors that are missing prefix
+        if action == "click" and "selector" in args:
+            selector = args["selector"]
+            # Check if selector looks like plain text (not CSS/xpath/text=)
+            # Common patterns that need text= prefix:
+            # - Contains spaces and no special CSS chars
+            # - Contains / without being xpath
+            # - Doesn't start with common prefixes
+            needs_prefix = (
+                not selector.startswith(("text=", "xpath=", "#", ".", "[", "button", "a[", "input"))
+                and not selector.startswith("//")  # xpath
+                and ("/" in selector or " " in selector or selector[0].islower())
+            )
+            
+            if needs_prefix:
+                args["selector"] = f"text={selector}"
         
         return self._browser_tools.execute(action, args)
 
