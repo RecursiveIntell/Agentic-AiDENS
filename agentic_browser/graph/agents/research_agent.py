@@ -231,6 +231,17 @@ Example: {{"action": "click", "args": {{"selector": "text=Some New Article Title
         else:
             clicked_warning = ""
         
+        # Add error hint if there have been consecutive failures
+        consecutive_err = state.get('consecutive_errors', 0)
+        if consecutive_err >= 1:
+            clicked_warning += f"""
+⚠️ LAST ACTION FAILED! You may be clicking links that don't exist.
+Use ONLY selectors from the visible content below. Look for real link text like:
+  - "Prevalence and Characteristics..."  
+  - "Harm Reduction Journal..."
+DO NOT make up link titles!
+"""
+        
         task_context = f"""
 RESEARCH TASK: {state['goal']}
 
@@ -287,6 +298,13 @@ Data collected:
                         final_answer=summary,
                         extracted_data={"research_findings": summary},
                     )
+            
+            # If there are consecutive errors (failed clicks), force scroll + extract
+            # This helps when LLM is hallucinating selectors that don't exist
+            consecutive_errors = state.get('consecutive_errors', 0)
+            if consecutive_errors >= 2 and action_data.get("action") == "click":
+                print(f"[RESEARCH] ⚠️ {consecutive_errors} consecutive errors - forcing scroll to find real links")
+                action_data = {"action": "scroll", "args": {"amount": 800}}
             
             # Detect duplicate click and force scroll instead
             if action_data.get("action") == "click":
