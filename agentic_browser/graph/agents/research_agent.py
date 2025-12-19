@@ -305,15 +305,18 @@ Data collected:
                     is_search_page = any(se in current_url_now.lower() for se in ['duckduckgo.com', 'google.com/search', 'bing.com/search'])
                     
                     if current_url_now and not is_search_page and current_url_now != 'about:blank':
-                        # Check if we already saved this URL's content
-                        already_extracted = any(
-                            current_url_now.split('?')[0].rstrip('/') in str(v) 
-                            for v in state['extracted_data'].values()
+                        # Check if we already visited this URL (means we already extracted)
+                        normalized_url = current_url_now.split('?')[0].rstrip('/')
+                        already_visited = any(
+                            u.split('?')[0].rstrip('/') == normalized_url
+                            for u in state.get('visited_urls', []) if u
                         )
-                        if not already_extracted:
+                        if not already_visited:
                             print(f"[RESEARCH] 📦 Auto-extracting content before going back from: {current_url_now[:50]}...")
                             # Force extract first
                             action_data = {"action": "extract_visible_text", "args": {"max_chars": 8000}}
+                        else:
+                            print(f"[RESEARCH] ✅ Already visited {current_url_now[:50]}..., proceeding with back")
                 except Exception as e:
                     print(f"[RESEARCH] Warning: auto-extract check failed: {e}")
             
@@ -409,6 +412,9 @@ Data collected:
                 # Save good content
                 key = f"research_source_{sources_visited + 1}"
                 extracted = {key: content_str[:2000]}
+                
+                # Mark URL as visited so we don't re-extract (fixes auto-extract loop)
+                visited = current_url
             
             # Create tool output message
             tool_content = "Action successful."
