@@ -122,7 +122,7 @@ class BaseAgent(ABC):
         pass
     
     def safe_invoke(self, messages: list) -> AIMessage:
-        """Invoke LLM with fallback handling for 404 errors.
+        """Invoke LLM with fallback handling for 404 errors and empty responses.
         
         If the configured model is not found (404), this will:
         1. Log the error
@@ -140,9 +140,22 @@ class BaseAgent(ABC):
             Exception: If retry fails or unrelated error
         """
         try:
-            return self.llm.invoke(messages)
+            response = self.llm.invoke(messages)
+            
+            # Handle empty responses
+            if response is None or (hasattr(response, 'content') and not response.content):
+                print("[WARN] LLM returned empty response, providing fallback")
+                return AIMessage(content='{"action": "done", "args": {"summary": "Unable to process - model returned empty response"}}')
+            
+            return response
+            
         except Exception as e:
             error_msg = str(e).lower()
+            
+            # Handle empty response errors
+            if "empty" in error_msg or "must contain" in error_msg:
+                print(f"[WARN] Empty response error: {e}")
+                return AIMessage(content='{"action": "done", "args": {"summary": "Model returned empty response"}}')
             
             # Check for 404 / model not found errors
             if "404" in error_msg or "not_found" in error_msg or "model" in error_msg and "not found" in error_msg:
