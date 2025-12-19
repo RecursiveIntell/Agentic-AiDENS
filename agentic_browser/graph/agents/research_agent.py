@@ -220,12 +220,13 @@ Action: {"action": "done", "args": {"summary": "## Research Report\\n\\n[Your de
 ⛔ ALREADY CLICKED ({len(unique_clicked)} unique links) - DO NOT CLICK THESE AGAIN:
 {chr(10).join(f'  - {sel}' for sel in unique_clicked[-10:])}
 
-You MUST click a DIFFERENT link or SCROLL DOWN to find more results!
+You MUST click a DIFFERENT link from the visible results!
 """
-            # If already clicked 2+ unique links, strongly suggest scroll
+            # If already clicked 2+ unique links, suggest scroll then click
             if len(unique_clicked) >= 2:
-                clicked_warning += """
-🔽 **SCROLL DOWN to find more search results!** Use: {"action": "scroll", "args": {"amount": 800}}
+                clicked_warning += f"""
+📋 After scrolling, click a NEW link you haven't clicked before!
+Example: {{"action": "click", "args": {{"selector": "text=Some New Article Title"}}}}
 """
         else:
             clicked_warning = ""
@@ -409,8 +410,9 @@ Data collected:
                         error="No substantial content found, click a result link first",
                     )
                 
-                # Save good content
-                key = f"research_source_{sources_visited + 1}"
+                # Save good content - number based on existing research_sources
+                existing_sources = len([k for k in state['extracted_data'].keys() if 'research_source' in k])
+                key = f"research_source_{existing_sources + 1}"
                 extracted = {key: content_str[:2000]}
                 
                 # Mark URL as visited so we don't re-extract (fixes auto-extract loop)
