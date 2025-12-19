@@ -31,6 +31,9 @@ class DataAgentNode(BaseAgent):
     SYSTEM_PROMPT = """You are a DATA TRANSFORM agent. You process and convert data files.
 
 Available actions:
+- state_to_file: { "output": "output.csv", "format": "csv|json|txt" }
+  # USE THIS to save extracted_data from previous agents to a file!
+  # This is how you convert browser/research data to CSV/JSON
 - json_to_csv: { "input": "data.json", "output": "data.csv" }
 - csv_to_json: { "input": "data.csv", "output": "data.json" }
 - json_query: { "input": "data.json", "query": "key.subkey" }  # Simple dot notation
@@ -41,6 +44,11 @@ Available actions:
 - extract: { "input": "archive.zip", "output": "./" }
 - done: { "summary": "what was accomplished" }
 
+CRITICAL: DATA FROM OTHER AGENTS
+- When browser/research agents collect data, it's in state['extracted_data']
+- To convert that data to a file, use state_to_file FIRST
+- Then you can process the resulting file
+
 RULES:
 1. Only process files in user's home directory or specified paths
 2. Never overwrite files without confirmation
@@ -49,7 +57,7 @@ RULES:
 
 Respond with JSON:
 {
-  "action": "json_to_csv|csv_to_json|...|done",
+  "action": "state_to_file|json_to_csv|csv_to_json|...|done",
   "args": { ... },
   "rationale": "brief reason"
 }"""
@@ -107,7 +115,11 @@ Data collected:
                 )
             
             # Execute the data action
-            result = self._execute_action(action, args)
+            # For state_to_file, pass extracted_data from state
+            if action == "state_to_file":
+                result = self._state_to_file(args, state.get('extracted_data', {}))
+            else:
+                result = self._execute_action(action, args)
             
             tool_msg = HumanMessage(content=f"Tool '{action}' output:\n{result['message'][:2000]}")
             
@@ -140,6 +152,7 @@ Data collected:
             "text_stats": self._text_stats,
             "compress": self._compress,
             "extract": self._extract,
+            # Note: state_to_file is handled separately in execute() since it needs state
         }
         
         handler = handlers.get(action)
@@ -150,6 +163,65 @@ Data collected:
             return handler(args)
         except Exception as e:
             return {"success": False, "message": f"Error: {str(e)}"}
+    
+    def _state_to_file(self, args: dict, extracted_data: dict) -> dict:
+        """Convert extracted_data from state to a file.
+        
+        This enables data flow from browser/research agents to file-based processing.
+        """
+        output = args.get("output", "output.txt")
+        fmt = args.get("format", "txt").lower()
+        
+        if not extracted_data:
+            return {"success": False, "message": "No extracted_data available from previous agents"}
+        
+        try:
+            output_path = self._validate_path(output, must_exist=False)
+        except ValueError as e:
+            # If path validation fails, use home directory
+            output_path = self._home_dir / output
+        
+        try:
+            if fmt == "csv":
+                # Convert dict entries to CSV rows
+                rows = []
+                for key, value in extracted_data.items():
+                    if isinstance(value, str):
+                        # Parse text content into structured data if possible
+                        rows.append({"source": key, "content": value[:2000]})
+                    elif isinstance(value, dict):
+                        row = {"source": key, **{k: str(v)[:500] for k, v in value.items()}}
+                        rows.append(row)
+                    else:
+                        rows.append({"source": key, "content": str(value)[:2000]})
+                
+                if not rows:
+                    return {"success": False, "message": "No data to convert"}
+                
+                with open(output_path, 'w', newline='') as f:
+                    writer = csv.DictWriter(f, fieldnames=rows[0].keys())
+                    writer.writeheader()
+                    writer.writerows(rows)
+                    
+            elif fmt == "json":
+                with open(output_path, 'w') as f:
+                    json.dump(extracted_data, f, indent=2, default=str)
+                    
+            else:  # txt
+                with open(output_path, 'w') as f:
+                    for key, value in extracted_data.items():
+                        f.write(f"=== {key} ===\n")
+                        f.write(str(value)[:5000])
+                        f.write("\n\n")
+            
+            return {
+                "success": True,
+                "message": f"Saved {len(extracted_data)} items to {output_path}",
+                "data": {"output": str(output_path), "format": fmt, "items": len(extracted_data)}
+            }
+            
+        except Exception as e:
+            return {"success": False, "message": f"Error writing file: {str(e)}"}
     
     def _validate_path(self, path: str, must_exist: bool = True) -> Path:
         """Validate and resolve a path safely."""
