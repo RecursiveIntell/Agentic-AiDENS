@@ -173,19 +173,41 @@ class BrowserTools:
                 # Check if element exists first
                 locator = self.page.locator(try_selector)
                 if locator.count() > 0:
-                    locator.first.click(timeout=timeout_ms // len(selectors_to_try) or 3000)
-                    
-                    # Wait briefly for any navigation or updates
+                    # Strategy 1: Standard click
                     try:
-                        self.page.wait_for_load_state("domcontentloaded", timeout=5000)
-                    except:
-                        pass
-                    
-                    return ToolResult(
-                        success=True,
-                        message=f"Clicked: {try_selector}",
-                        data={"url": self.page.url, "selector_used": try_selector},
-                    )
+                        locator.first.click(timeout=3000)
+                        self._wait_after_click()
+                        return ToolResult(
+                            success=True,
+                            message=f"Clicked: {try_selector}",
+                            data={"url": self.page.url, "selector_used": try_selector},
+                        )
+                    except Exception as e:
+                        # Strategy 2: Force click (bypasses visibility/overlay checks)
+                        # Only try if the error suggests it might help (Timeout, or "not clickable")
+                        print(f"Standard click failed: {e}. Retrying with force=True")
+                        try:
+                            locator.first.click(timeout=3000, force=True)
+                            self._wait_after_click()
+                            return ToolResult(
+                                success=True,
+                                message=f"Force-clicked: {try_selector}",
+                                data={"url": self.page.url, "selector_used": try_selector, "method": "force"},
+                            )
+                        except Exception as e2:
+                            # Strategy 3: JavaScript click (The Nuclear Option)
+                            print(f"Force click failed: {e2}. Retrying with JS evaluation")
+                            try:
+                                locator.first.evaluate("element => element.click()")
+                                self._wait_after_click()
+                                return ToolResult(
+                                    success=True,
+                                    message=f"JS-clicked: {try_selector}",
+                                    data={"url": self.page.url, "selector_used": try_selector, "method": "js"},
+                                )
+                            except Exception as e3:
+                                last_error = e3
+                                continue
             except Exception as e:
                 last_error = e
                 continue
@@ -193,9 +215,19 @@ class BrowserTools:
         # If all selectors failed, return the error
         return ToolResult(
             success=False,
-            message=f"Could not click element. Tried selectors: {selectors_to_try[:3]}... Error: {last_error}",
+            message=f"Could not click element. Tried selectors: {selectors_to_try[:3]}... Last Error: {last_error}",
             data={"original_selector": original_selector},
         )
+
+    def _wait_after_click(self):
+        """Helper to wait specifically after a click action."""
+        try:
+            # Wait for load state or network idle
+            self.page.wait_for_load_state("domcontentloaded", timeout=4000)
+        except:
+            pass
+        # Always wait a tiny bit for JS to react
+        self.page.wait_for_timeout(500)
     
     def type_text(
         self,
@@ -234,20 +266,26 @@ class BrowserTools:
         # Try the primary selector first
         selectors_to_try = [selector] + [s for s in fallback_selectors if s != selector]
         
+        # Wait for page to be ready before interacting
+        try:
+            self.page.wait_for_load_state("domcontentloaded", timeout=5000)
+        except:
+            pass  # Continue anyway
+        
         last_error = None
         for sel in selectors_to_try:
             try:
                 # First try to click the element to focus it
                 try:
-                    self.page.click(sel, timeout=3000)
-                    self.page.wait_for_timeout(200)
+                    self.page.click(sel, timeout=4000)
+                    self.page.wait_for_timeout(300)
                 except:
                     pass  # Click failed, still try to type
                 
                 if clear_first:
-                    self.page.fill(sel, text, timeout=5000)
+                    self.page.fill(sel, text, timeout=8000)
                 else:
-                    self.page.type(sel, text, timeout=5000)
+                    self.page.type(sel, text, timeout=8000)
                 
                 return ToolResult(
                     success=True,
@@ -389,13 +427,14 @@ class BrowserTools:
             data={"value": value},
         )
     
-    def extract_visible_text(self, max_chars: int = 8000) -> ToolResult:
+    def extract_visible_text(self, max_chars: int = 8000, auto_scroll: bool = False) -> ToolResult:
         """Extract all visible text from the page.
         
         Includes retry logic for transient timing errors during navigation.
         
         Args:
             max_chars: Maximum characters to return
+            auto_scroll: If True, scrolls down to trigger lazy loading before extracting
             
         Returns:
             ToolResult with visible text
@@ -410,6 +449,36 @@ class BrowserTools:
                     self.page.wait_for_load_state("domcontentloaded", timeout=3000)
                 except:
                     pass
+                
+                # Auto-scroll if requested to trigger lazy loading
+                if auto_scroll:
+                    try:
+                        # Gentle scroll to bottom with timing for slower connections
+                        # Gives time for lazy loading and screenshots
+                        self.page.evaluate("""
+                            async () => {
+                                const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+                                // Limit max scroll to prevent infinite loops or huge delays
+                                const maxScroll = 15000;
+                                const height = Math.min(document.body.scrollHeight, maxScroll);
+                                
+                                // Scroll down in viewport-sized chunks with timing for slow connections
+                                // 150ms between scrolls allows for lazy loading and screenshots
+                                for (let i = 0; i < height; i += 600) {
+                                    window.scrollTo(0, i);
+                                    await delay(150);  // Increased from 50ms for slower connections
+                                }
+                                window.scrollTo(0, document.body.scrollHeight);
+                                await delay(400);  // Increased from 200ms - wait for final content load
+                                
+                                // Scroll back up to top for consistent state
+                                window.scrollTo(0, 0);
+                                await delay(200);  // Increased from 100ms
+                            }
+                        """)
+                    except Exception as e:
+                        print(f"Auto-scroll warning: {e}")
+
                 
                 # Get text content, excluding scripts and styles
                 text = self.page.evaluate("""

@@ -11,6 +11,7 @@ from .sysadmin_agent import SysAdminAgentNode
 from .media_agent import MediaAgentNode
 from .package_agent import PackageAgentNode
 from .automation_agent import AutomationAgentNode
+from .planner_agent import PlannerAgentNode
 
 __all__ = [
     "BaseAgent",
@@ -24,6 +25,7 @@ __all__ = [
     "MediaAgentNode",
     "PackageAgentNode",
     "AutomationAgentNode",
+    "PlannerAgentNode",
 ]
 
 

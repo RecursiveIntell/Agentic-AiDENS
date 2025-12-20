@@ -57,6 +57,22 @@ class AgentState(TypedDict):
     
     # Track if last action was scroll - forces extract on next step to update context
     last_action_was_scroll: bool
+    
+    # Retrospective Agent Tracking
+    retrospective_ran: bool
+    
+    # Planning-First Architecture: Implementation plan created by planner agent
+    implementation_plan: dict | None  # Structured plan with steps, agents, success criteria
+
+    plan_step_index: int  # Current step being executed (0-indexed)
+    
+    # Cost & Usage Tracking
+    # Dictionary with keys: input_tokens, output_tokens, total_tokens, total_cost
+    # Using operator.add doesn't work well for dicts, so we'll need a custom reducer or manual updates
+    # Actually, we can just treat it as a dict that gets overwritten by the latest state update, 
+    # BUT we want to *accumulate*. 
+    # Better: We'll store it as a dict and agents will READ current, ADD to it, and WRITE back.
+    token_usage: dict[str, float]
 
 
 def create_initial_state(
@@ -77,8 +93,8 @@ def create_initial_state(
     return AgentState(
         messages=[],
         goal=goal,
-        current_domain="supervisor",
-        active_agent="supervisor",
+        current_domain="planner",  # Start with planner (Planning-First)
+        active_agent="planner",
         task_complete=False,
         final_answer=None,
         extracted_data={},
@@ -94,5 +110,16 @@ def create_initial_state(
         session_id=session_id,
         clicked_selectors=[],
         last_action_was_scroll=False,
+        implementation_plan=None,
+        plan_step_index=0,
+        retrospective_ran=False,
+        
+        # Initial usage stats
+        token_usage={
+            "input_tokens": 0.0,
+            "output_tokens": 0.0,
+            "total_tokens": 0.0,
+            "total_cost": 0.0,
+        },
     )
 

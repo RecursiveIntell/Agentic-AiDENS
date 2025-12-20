@@ -21,6 +21,8 @@ from .agents.sysadmin_agent import sysadmin_agent_node
 from .agents.media_agent import media_agent_node
 from .agents.package_agent import package_agent_node
 from .agents.automation_agent import automation_agent_node
+from .agents.planner_agent import planner_agent_node
+from .agents.workflow_agent import workflow_agent_node
 
 
 def build_agent_graph(checkpointer: MemorySaver | None = None):
@@ -37,6 +39,8 @@ def build_agent_graph(checkpointer: MemorySaver | None = None):
     - sysadmin: System administration agent
     - media: Media processing agent
     - package: Package & dev environment agent
+    - automation: Scheduling & reminders agent
+    - workflow: n8n workflow integration agent
     
     Args:
         checkpointer: Optional memory saver for persistence
@@ -61,9 +65,16 @@ def build_agent_graph(checkpointer: MemorySaver | None = None):
     graph.add_node("media", media_agent_node)
     graph.add_node("package", package_agent_node)
     graph.add_node("automation", automation_agent_node)
+    graph.add_node("workflow", workflow_agent_node)
     
-    # Set entry point
-    graph.set_entry_point("supervisor")
+    # Planning-First: Planner runs first
+    graph.add_node("planner", planner_agent_node)
+    
+    # Set entry point to PLANNER (Planning-First Architecture)
+    graph.set_entry_point("planner")
+    
+    # Planner always goes to supervisor after creating plan
+    graph.add_edge("planner", "supervisor")
     
     # Add conditional routing from supervisor
     graph.add_conditional_edges(
@@ -80,6 +91,7 @@ def build_agent_graph(checkpointer: MemorySaver | None = None):
             "media": "media",
             "package": "package",
             "automation": "automation",
+            "workflow": "workflow",
             "__end__": END,
         }
     )
@@ -104,6 +116,7 @@ def build_agent_graph(checkpointer: MemorySaver | None = None):
     graph.add_conditional_edges("media", check_task_complete, {"supervisor": "supervisor", "__end__": END})
     graph.add_conditional_edges("package", check_task_complete, {"supervisor": "supervisor", "__end__": END})
     graph.add_conditional_edges("automation", check_task_complete, {"supervisor": "supervisor", "__end__": END})
+    graph.add_conditional_edges("workflow", check_task_complete, {"supervisor": "supervisor", "__end__": END})
     
     # Compile with optional checkpointer
     if checkpointer:
@@ -140,6 +153,14 @@ class MultiAgentRunner:
         self.os_tools = os_tools
         self.enable_checkpointing = enable_checkpointing
         
+        # Initialize persistence
+        from .memory import SessionStore
+        self.session_store = SessionStore() if enable_checkpointing else None
+        
+        # Initialize RecallTool
+        from .run_history import RecallTool
+        self.recall_tool = RecallTool(self.session_store) if self.session_store else None
+        
         # Generate session ID and register tools
         self.session_id = str(uuid.uuid4())
         self._registry = ToolRegistry.get_instance()
@@ -148,6 +169,7 @@ class MultiAgentRunner:
             config=config,
             browser_manager=browser_manager,
             os_tools=os_tools,
+            recall_tool=self.recall_tool,
         )
         
         # Build graph
@@ -182,16 +204,29 @@ class MultiAgentRunner:
         )
         
         # Run the graph with thread_id for checkpointer
-        final_state = self.graph.invoke(
-            initial_state,
-            config={
-                "configurable": {
-                    "thread_id": self.session_id,
+        try:
+            final_state = self.graph.invoke(
+                initial_state,
+                config={
+                    "configurable": {
+                        "thread_id": self.session_id,
+                    }
+                },
+            )
+            return final_state
+        except Exception as e:
+            error_msg = str(e).lower()
+            # Handle empty response errors - model returned nothing
+            empty_patterns = ["empty", "must contain", "output text", "tool calls", "cannot both be empty"]
+            if any(p in error_msg for p in empty_patterns):
+                print(f"[GRAPH] ⚠️ Model returned empty response: {e}")
+                return {
+                    **initial_state,
+                    "task_complete": True,
+                    "final_answer": "Model returned empty response - please try a different model or restart LM Studio",
+                    "error": str(e),
                 }
-            },
-        )
-        
-        return final_state
+            raise
     
     def stream(self, goal: str, max_steps: int = 30):
         """Stream execution steps for real-time updates.
@@ -211,6 +246,18 @@ class MultiAgentRunner:
         )
         
         try:
+            # Create session in DB
+            if self.session_store:
+                self.session_store.create_session(
+                    self.session_id, 
+                    goal, 
+                    {**initial_state, "session_id": self.session_id}
+                )
+            
+            # We need an LLM client.
+            from .agents.base import create_llm_client
+            
+            # Get config from registry
             for event in self.graph.stream(
                 initial_state,
                 config={
@@ -220,9 +267,67 @@ class MultiAgentRunner:
                     "recursion_limit": 50,  # Allow more agent interactions
                 },
             ):
+                # PERSISTENCE: Update session store
+                if self.session_store:
+                    for node_name, node_state in event.items():
+                        # Update full session state
+                        self.session_store.update_session(self.session_id, node_state)
+                        
+                        # Log step if applicable
+                        if "messages" in node_state and len(node_state["messages"]) > 0:
+                            last_msg = node_state["messages"][-1]
+                            agent_name = node_name
+                            
+                            # Log tool calls or text
+                            if hasattr(last_msg, 'tool_calls') and last_msg.tool_calls:
+                                for tc in last_msg.tool_calls:
+                                    self.session_store.add_step(
+                                        self.session_id,
+                                        node_state.get("step_count", 0),
+                                        agent_name,
+                                        tc.get("name"),
+                                        tc.get("args"),
+                                        None # Result comes later
+                                    )
+                            else:
+                                content = str(last_msg.content)
+                                # Log simplified thought
+                                self.session_store.add_step(
+                                    self.session_id,
+                                    node_state.get("step_count", 0),
+                                    agent_name,
+                                    "think",
+                                    {"text": content[:200]},
+                                    None
+                                )
+
+                    # STRATEGY EXTRACTION: If task completed successfully, crystallize strategy
+                    # Check if event contains 'supervisor' or final state indicating success
+                    # We check the event dict values for 'task_complete'
+                    for node_state in event.values():
+                        if node_state.get("task_complete"):
+                            final_ans = node_state.get("final_answer")
+                            error = node_state.get("error")
+                            if final_ans and not error:
+                                try:
+                                    self._extract_and_save_strategy(goal, final_ans)
+                                except Exception as e:
+                                    print(f"⚠️ Strategy extraction failed: {e}")
+                
                 yield event
+            
+            if self.session_store:
+                self.session_store.close()
+                
         except Exception as e:
             error_msg = str(e).lower()
+            if self.session_store:
+                 # Update session with error
+                 try:
+                     self.session_store.update_session(self.session_id, {"error": str(e), "task_complete": True})
+                 except:
+                     pass
+
             # Handle empty response errors from Anthropic/OpenAI
             if "empty" in error_msg or "must contain" in error_msg:
                 import logging

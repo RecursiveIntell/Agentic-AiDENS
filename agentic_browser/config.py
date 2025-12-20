@@ -97,8 +97,18 @@ class AgentConfig:
         default_factory=lambda: os.getenv("AGENTIC_BROWSER_DEBUG", "").lower() in ("1", "true", "yes")
     )
     
+    # Persistency
+    cost_file_path: str = "~/.agentic_browser_costs.json"
+    learning_log_path: str = "~/.agentic_browser_learning_log.md"
+    
     # Domain routing settings
     routing_mode: str = "auto"  # auto | browser | os | ask
+    
+    # Vision mode - send screenshots to LLM for visual understanding
+    # Works with GPT-4o, Claude-3, Gemini 1.5 Pro
+    vision_mode: bool = field(
+        default_factory=lambda: os.getenv("AGENTIC_BROWSER_VISION", "").lower() in ("1", "true", "yes")
+    )
     
     # OS agent LLM settings (optional, falls back to main model settings)
     os_model_endpoint: Optional[str] = field(
@@ -121,6 +131,26 @@ class AgentConfig:
         """Initialize internal state."""
         # Cache for temp profile directory (when no_persist=True)
         self._cached_profile_dir: Optional[Path] = None
+        
+        # Auto-enable vision for known vision-capable models if not explicitly set
+        # This provides a better out-of-the-box experience
+        # Cloud providers + local VL (vision-language) models
+        vision_models = [
+            "gpt-4o", "claude-3", "gemini-1.5",  # Cloud providers
+            "-vl", "vl-", "vision", "llava",      # Local VL model patterns
+            "minicpm-v", "qwen-vl", "pixtral",    # Specific local VL models
+        ]
+        model_lower = (self.model or "").lower()
+        
+        # Check if user explicitly disabled it via env var
+        env_vision = os.getenv("AGENTIC_BROWSER_VISION", "").lower()
+        explicitly_disabled = env_vision in ("0", "false", "no")
+        
+        if not self.vision_mode and not explicitly_disabled:
+            if any(vm in model_lower for vm in vision_models):
+                self.vision_mode = True 
+                import logging
+                logging.getLogger(__name__).info(f"Auto-enabled Vision Mode for model: {self.model}")
     
     @property
     def profile_dir(self) -> Path:

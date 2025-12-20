@@ -22,6 +22,7 @@ class ToolSet:
         config: Any,
         browser_manager: Optional["LazyBrowserManager"] = None,
         os_tools: Any = None,
+        recall_tool: Any = None,
     ):
         """Initialize tool set.
         
@@ -29,10 +30,12 @@ class ToolSet:
             config: AgentConfig instance
             browser_manager: Optional LazyBrowserManager for on-demand browser
             os_tools: Optional OSTools instance
+            recall_tool: Optional RecallTool instance
         """
         self.config = config
         self._browser_manager = browser_manager
         self.os_tools = os_tools
+        self.recall_tool = recall_tool
     
     @property
     def browser_tools(self) -> Any:
@@ -90,6 +93,7 @@ class ToolRegistry:
         config: Any,
         browser_manager: Optional["LazyBrowserManager"] = None,
         os_tools: Any = None,
+        recall_tool: Any = None,
     ) -> None:
         """Register tools for a session.
         
@@ -98,12 +102,14 @@ class ToolRegistry:
             config: AgentConfig instance
             browser_manager: Optional LazyBrowserManager for on-demand browser
             os_tools: Optional OSTools instance
+            recall_tool: Optional RecallTool instance
         """
         with self._tools_lock:
             self._tools[session_id] = ToolSet(
                 config=config,
                 browser_manager=browser_manager,
                 os_tools=os_tools,
+                recall_tool=recall_tool,
             )
     
     def get(self, session_id: str) -> Optional[ToolSet]:
@@ -131,17 +137,32 @@ class ToolRegistry:
                 self._tools[session_id].os_tools = os_tools
     
     def unregister(self, session_id: str) -> None:
-        """Remove tools for a session.
+        """Remove tools for a session and cleanup resources.
         
         Args:
             session_id: Session identifier
         """
         with self._tools_lock:
-            self._tools.pop(session_id, None)
+            msg = f"Unregistering session {session_id}"
+            
+            toolset = self._tools.pop(session_id, None)
+            if toolset and toolset.browser_manager:
+                try:
+                    # EXPLICTLY CLOSE BROWSER TO PREVENT LEAKS
+                    if getattr(toolset.browser_manager, "is_browser_open", lambda: False)():
+                        toolset.browser_manager.close()
+                except Exception as e:
+                    print(f"Error closing browser for session {session_id}: {e}")
     
     def clear(self) -> None:
-        """Clear all registered tools."""
+        """Clear all registered tools and cleanup resources."""
         with self._tools_lock:
+            for session_id, toolset in self._tools.items():
+                if toolset.browser_manager:
+                    try:
+                         toolset.browser_manager.close()
+                    except Exception:
+                        pass
             self._tools.clear()
 
 

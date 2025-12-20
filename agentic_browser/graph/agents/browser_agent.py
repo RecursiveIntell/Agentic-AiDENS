@@ -117,11 +117,19 @@ Respond with JSON:
         
         # Detect if we're on an images page
         url_lower = current_url.lower()
-        is_images_page = any(x in url_lower for x in [
-            '/images', 'images.', 'pixabay', 'pexels', 'unsplash', 
-            'ia=images', 'iax=images', 'tbm=isch',  # DuckDuckGo and Google image params
-            'image', 'photo', 'pic', 'jpg', 'png'
+        
+        # Detect blocked/CAPTCHA pages (Google, etc.) - these are NOT image pages!
+        is_blocked_page = any(x in url_lower for x in [
+            '/sorry/', '/captcha', 'unusual_traffic', 'recaptcha',
+            'challenge-platform', 'blocked'
         ])
+        
+        # Only flag as images page if NOT blocked and has specific image site patterns
+        is_images_page = not is_blocked_page and any(x in url_lower for x in [
+            '/images', 'images.', 'pixabay.com', 'pexels.com', 'unsplash.com',
+            'ia=images', 'iax=images', 'tbm=isch',  # DuckDuckGo and Google image params
+        ])
+
         
         # Check if goal involves downloading images
         goal_lower = state['goal'].lower()
@@ -134,10 +142,45 @@ Respond with JSON:
         print(f"[BROWSER DEBUG] URL: {current_url[:80]}...")
         print(f"[BROWSER DEBUG] step_count={step_count}, is_images_page={is_images_page}, is_image_download_goal={is_image_download_goal}")
         
+        # === HANDLE BLOCKED PAGES ===
+        # If we're on a CAPTCHA/blocked page, redirect to DuckDuckGo Images
+        if is_blocked_page and is_image_download_goal:
+            print(f"[BROWSER] ⚠️ Blocked page detected! Redirecting to DuckDuckGo Images")
+            # Extract search terms from goal
+            search_terms = state['goal'].replace('find', '').replace('picture', '').replace('image', '')
+            search_terms = search_terms.replace('save', '').replace('download', '').strip()[:50]
+            search_query = search_terms.replace(' ', '+') or 'rare+cat'
+            
+            redirect_url = f"https://duckduckgo.com/?q={search_query}&iax=images&ia=images"
+            self._browser_tools.execute("goto", {"url": redirect_url})
+            
+            return self._update_state(
+                state,
+                messages=[AIMessage(content=f"Blocked by search engine, redirecting to DuckDuckGo Images")],
+                error=None,  # Clear any previous error
+            )
+        
+        # Track download failures for loop breaking
+        failed_downloads = state.get('_failed_download_count', 0)
+        
         # === SMART AUTO-DOWNLOAD ===
         # If we're on an images page, goal is to download an image, and we've been trying for a while
         # Just automatically download the image instead of asking the LLM (which keeps ignoring it)
         if is_images_page and is_image_download_goal and step_count >= 6:
+            # If we've already failed 2+ times, navigate to a reliable image site
+            if failed_downloads >= 2:
+                print(f"[BROWSER] 🔄 download_image failed {failed_downloads}x, navigating to Pixabay")
+                search_query = state['goal'].replace(' ', '%20')[:40]
+                pixabay_url = f"https://pixabay.com/images/search/{search_query}/"
+                self._browser_tools.execute("goto", {"url": pixabay_url})
+                
+                new_state = self._update_state(
+                    state,
+                    messages=[AIMessage(content=f"Download failed {failed_downloads}x, navigating to Pixabay")],
+                )
+                new_state['_failed_download_count'] = 0  # Reset counter
+                return new_state
+            
             print(f"[BROWSER] 🔄 AUTO-DOWNLOAD TRIGGERED! step={step_count}, executing download_image")
             logger.info(f"Auto-download: images page detected, goal involves images, step {step_count}")
             
@@ -158,8 +201,14 @@ Respond with JSON:
                     final_answer=f"Downloaded image to: {download_path}",
                 )
             else:
-                # Download failed, log and let agent try other approaches
-                print(f"[BROWSER] ⚠️ Auto-download failed: {result.message}")
+                # Download failed - increment counter and continue
+                failed_downloads += 1
+                print(f"[BROWSER] ⚠️ Auto-download failed ({failed_downloads}x): {result.message}")
+                # Store failure count for next iteration
+                new_state = self._update_state(state, error=result.message)
+                new_state['_failed_download_count'] = failed_downloads
+                return new_state
+
         
         image_download_hint = ""
         if is_images_page:
@@ -180,15 +229,47 @@ Top Links:
 {self._format_links(page_state.get('top_links', []) or page_state.get('links', []))}
 
 Already Visited:
-{chr(10).join(f'- {url}' for url in state['visited_urls'][-5:])}
+{chr(10).join(f'- {url}' for url in state['visited_urls'])}
 
 Your task: {state['goal']}
 """
         
+
+        # Vision mode: capture screenshot for LLM
+        screenshot_b64 = None
+        if self.config.vision_mode and self._browser_tools:
+            screenshot_b64 = self.capture_screenshot_base64(self._browser_tools)
+            if screenshot_b64:
+                task_context += """
+
+[VISION MODE] A screenshot of the current page is attached.
+Use the screenshot to:
+- Identify interactive elements and their text
+- Find the right buttons/links to click
+- Understand the page layout
+"""
+                print("[BROWSER] Vision mode: screenshot captured")
+        
+        # Build messages with optional vision
+        # NOTE: This creates the messages list including the new HumanMessage prompt at the end
         messages = self._build_messages(state, task_context)
         
+        # Create a copy for specific LLM invocation (to add image)
+        invoke_messages = list(messages)
+        
+        # Replace last HumanMessage with vision message if we have screenshot
+        if screenshot_b64 and self.config.vision_mode:
+            # Pop the last message and replace with vision-enabled one for the LLM ONLY
+            last_msg = invoke_messages.pop()
+            if hasattr(last_msg, 'content'):
+                invoke_messages.append(self.build_vision_message(last_msg.content, screenshot_b64))
+        
         try:
-            response = self.safe_invoke(messages)
+            response = self.safe_invoke(invoke_messages)
+            
+            # Update token usage
+            token_usage = self.update_token_usage(state, response)
+            
             action_data = self._parse_action(response.content)
             
             # Log the action for debugging
@@ -245,6 +326,12 @@ Your task: {state['goal']}
                     state,
                     messages=[AIMessage(content=response.content)],
                     extracted_data={"browser_findings": summary},
+                    token_usage=token_usage,
+                    step_update={
+                        "status": "completed",
+                        "outcome": f"Browser task completed: {summary}",
+                        "notes": summary
+                    }
                 )
             
             # Execute the browser action
@@ -297,10 +384,15 @@ Your task: {state['goal']}
             # Build updated state with loop tracking
             new_state = self._update_state(
                 state,
-                messages=[AIMessage(content=response.content), tool_msg],
+                messages=[
+                    messages[-1],  # The TEXT-ONLY prompt (crucial for history/memory!)
+                    AIMessage(content=response.content), 
+                    tool_msg
+                ],
                 visited_url=visited,
                 extracted_data=extracted,
                 error=result.message if not result.success else None,
+                token_usage=token_usage,
             )
             
             # Set the updated clicked selectors list
@@ -377,10 +469,7 @@ Your task: {state['goal']}
         if action == "click" and "selector" in args:
             selector = args["selector"]
             # Check if selector looks like plain text (not CSS/xpath/text=)
-            # Common patterns that need text= prefix:
-            # - Contains spaces and no special CSS chars
-            # - Contains / without being xpath
-            # - Doesn't start with common prefixes
+            # ... (unchanged logic) ...
             needs_prefix = (
                 not selector.startswith(("text=", "xpath=", "#", ".", "[", "button", "a[", "input"))
                 and not selector.startswith("//")  # xpath
@@ -389,6 +478,21 @@ Your task: {state['goal']}
             
             if needs_prefix:
                 args["selector"] = f"text={selector}"
+        
+        # PROVIDER-SPECIFIC OPTIMIZATION:
+        # If accessing Anthropic (known for strict TPM limits), reduce extraction size
+        if action == "extract_visible_text":
+            current_max = args.get("max_chars", 8000)
+            
+            # Re-use the provider detection logic from base.py (simplified here)
+            endpoint_lower = (self.config.model_endpoint or "").lower()
+            model_lower = (self.config.model or "").lower()
+            is_local = "localhost" in endpoint_lower or "127.0.0.1" in endpoint_lower
+            is_anthropic = "anthropic" in endpoint_lower or ("claude" in model_lower and not is_local)
+            
+            if is_anthropic and current_max > 4500:
+                print(f"[BROWSER] Optimizing for Anthropic TPM: Reducing extract size {current_max} -> 4500")
+                args["max_chars"] = 4500
         
         return self._browser_tools.execute(action, args)
 

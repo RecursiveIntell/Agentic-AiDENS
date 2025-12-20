@@ -93,13 +93,14 @@ Set requires_approval=true for HIGH risk and MEDIUM risk actions."""
         
         # Initialize the LangChain ChatOpenAI model
         # Works with any OpenAI-compatible API
+        # 120s timeout should be enough for local models; use explicit thinking models for longer
         self.llm = ChatOpenAI(
             base_url=config.model_endpoint,
             api_key=config.api_key or "not-required",
             model=config.model,
             temperature=0.1,
-            max_tokens=1000,
-            request_timeout=60,
+            max_tokens=2000,
+            request_timeout=120,  # 2 minutes
         )
         
         # Conversation history for full context
@@ -378,6 +379,17 @@ Next action? JSON only."""
         """
         # Try to extract JSON from response
         content = raw_response.strip()
+        
+        # Strip <think>...</think> reasoning tags from thinking models
+        # These contain the model's internal reasoning chain
+        if "<think>" in content:
+            import re
+            think_pattern = re.compile(r'<think>.*?</think>', re.DOTALL)
+            thinking_content = think_pattern.findall(content)
+            if thinking_content:
+                # Log that we stripped thinking (optional debug)
+                print(f"[LLM] Stripped {len(thinking_content)} thinking block(s)")
+            content = think_pattern.sub('', content).strip()
         
         # Remove markdown code blocks if present
         if content.startswith("```"):

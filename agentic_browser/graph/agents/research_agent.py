@@ -29,10 +29,23 @@ Available actions:
 - goto: { "url": "https://..." } - Navigate to URL
 - click: { "selector": "text=Link Text" } - Click links (USE text= prefix!)
 - back: { } - Go back to previous page (e.g., to return to search results)
+- scroll_down: { } - Scroll down to see more content (DO THIS OFTEN!)
 - extract_visible_text: { "max_chars": 8000 } - Get page text
 - done: { "summary": "your research findings" } - Complete with report
+- search_runs: { "query": "python docs" } - Find past successful runs
+- get_run_details: { "run_id": "..." } - Read steps from a past run
+
+⬇️ SCROLL MORE! Pages often have important content below the fold.
+- After landing on a content page, scroll 2-3 times to get ALL the information
+- If you can't find links, SCROLL to reveal more results
+- Extract text AFTER scrolling to capture the full page
 
 === SYSTEMATIC RESEARCH WORKFLOW ===
+
+STEP 0: CHECK HISTORY (STRATEGIC)
+- Before researching from scratch, check if we've done this before!
+- Action: {"action": "search_runs", "args": {"query": "your topic"}}
+- If you find a matching successful run, use its findings.
 
 STEP 1: SEARCH
 - Go to DuckDuckGo: {"action": "goto", "args": {"url": "https://duckduckgo.com/?q=your+search+terms"}}
@@ -90,15 +103,17 @@ Respond with JSON:
   "rationale": "brief reason"
 }"""
 
-    def __init__(self, config, browser_tools=None):
+    def __init__(self, config, browser_tools=None, recall_tool=None):
         """Initialize research agent.
         
         Args:
             config: Agent configuration
             browser_tools: Browser tools for web access
+            recall_tool: RecallTool for accessing past runs
         """
         super().__init__(config)
         self._browser_tools = browser_tools
+        self.recall_tool = recall_tool
     
     @property
     def system_prompt(self) -> str:
@@ -249,6 +264,17 @@ Use ONLY selectors from the visible content below. Look for real link text like:
 DO NOT make up link titles!
 """
         
+        # Check if we've reached the bottom of the page (from scroll detection)
+        reached_bottom = state.get('_reached_page_bottom', False)
+        bottom_hint = ""
+        if reached_bottom:
+            bottom_hint = """
+⚠️ PAGE BOTTOM REACHED: You have scrolled to the bottom of this page.
+DO NOT scroll again. Either:
+1. Extract the content now: {"action": "extract_visible_text", "args": {"max_chars": 12000}}
+2. Go back to find more sources: {"action": "back", "args": {}}
+"""
+        
         task_context = f"""
 RESEARCH TASK: {state['goal']}
 
@@ -256,7 +282,8 @@ RESEARCH TASK: {state['goal']}
 Unique websites visited: {sources_visited}/{MIN_SOURCES_REQUIRED}
 {progress_msg}
 {clicked_warning}
-Visited URLs: {chr(10).join(state['visited_urls'][-5:]) or '(none)'}
+{bottom_hint}
+Visited URLs: {chr(10).join(state['visited_urls']) or '(none)'}
 
 Current page: {page_state.get('page_title', '') or page_state.get('title', 'Unknown')}
 URL: {current_url}
@@ -269,11 +296,42 @@ Visible content (truncated):
 Data collected:
 {json.dumps(state['extracted_data'], indent=2)[:1000]}
 """
+
+        # Vision mode: capture screenshot for LLM
+        screenshot_b64 = None
+        if self.config.vision_mode and self._browser_tools:
+            screenshot_b64 = self.capture_screenshot_base64(self._browser_tools)
+            if screenshot_b64:
+                task_context += """
+
+[VISION MODE] A screenshot of the current page is attached.
+Use the screenshot to:
+- Identify visible links to click (look for underlined/colored text)
+- Determine if you need to SCROLL DOWN to see more content/links
+- Find the actual text of links instead of guessing
+"""
+                print("[RESEARCH] Vision mode: screenshot captured")
         
+        # Build messages with optional vision
+        # NOTE: This creates the messages list including the new HumanMessage prompt at the end
         messages = self._build_messages(state, task_context)
         
+        # Create a copy for specific LLM invocation (to add image)
+        invoke_messages = list(messages)
+        
+        # Replace last HumanMessage with vision message if we have screenshot
+        if screenshot_b64 and self.config.vision_mode:
+            # Pop the last message and replace with vision-enabled one for the LLM ONLY
+            last_msg = invoke_messages.pop()
+            if hasattr(last_msg, 'content'):
+                invoke_messages.append(self.build_vision_message(last_msg.content, screenshot_b64))
+        
         try:
-            response = self.safe_invoke(messages)
+            response = self.safe_invoke(invoke_messages)
+            
+            # Update token usage
+            token_usage = self.update_token_usage(state, response)
+            
             action_data = self._parse_action(response.content)
             
             # Debug: show what action was chosen
@@ -309,6 +367,12 @@ Data collected:
                         task_complete=True,
                         final_answer=summary,
                         extracted_data={"research_findings": summary},
+                        token_usage=token_usage,
+                        step_update={
+                            "status": "completed",
+                            "outcome": f"Research completed: {summary[:100]}...",
+                            "notes": summary
+                        }
                     )
             
             # If there are recent failed clicks, force scroll to find real links
@@ -317,21 +381,13 @@ Data collected:
             recent_fails = sum(1 for m in recent_msgs if hasattr(m, 'content') and 'Could not click' in str(m.content))
             # Also check if current state has a click error
             current_error = state.get('error', '') or ''
-            if 'Could not click' in current_error:
-                recent_fails += 1
             
-            # Check if we just scrolled - if so, force extract to update context
-            last_action_was_scroll = state.get('last_action_was_scroll', False)
-            print(f"[RESEARCH DEBUG] last_action_was_scroll={last_action_was_scroll}, action={action_data.get('action')}")
-            if last_action_was_scroll and action_data.get("action") == "click":
-                # LLM is trying to click but hasn't seen new content after scroll
-                print(f"[RESEARCH] 📋 Just scrolled - forcing extract to show new visible content before clicking")
-                action_data = {"action": "extract_visible_text", "args": {"max_chars": 4000}}
-                # Will clear the flag after execution below
-                
-            if recent_fails >= 1 and action_data.get("action") == "click":
-                print(f"[RESEARCH] ⚠️ {recent_fails} recent click failure(s) - forcing scroll to find real links")
-                action_data = {"action": "scroll", "args": {"amount": 800}}
+            # Auto-scroll logic removed to prevent loops
+            
+            # Map 'scroll_down' action to 'scroll' tool
+            if action_data.get("action") == "scroll_down":
+                action_data["action"] = "scroll"
+                action_data["args"] = {"amount": 800}
             
             # Detect duplicate click and force scroll instead
             if action_data.get("action") == "click":
@@ -359,17 +415,26 @@ Data collected:
                         )
                         if not already_visited:
                             print(f"[RESEARCH] 📦 Auto-extracting content before going back from: {current_url_now[:50]}...")
-                            # Force extract first
-                            action_data = {"action": "extract_visible_text", "args": {"max_chars": 8000}}
+                            # Force extract first with auto-scroll
+                            action_data = {"action": "extract_visible_text", "args": {"max_chars": 12000, "auto_scroll": True}}
                         else:
                             print(f"[RESEARCH] ✅ Already visited {current_url_now[:50]}..., proceeding with back")
                 except Exception as e:
                     print(f"[RESEARCH] Warning: auto-extract check failed: {e}")
             
             # Execute browser action
+            final_args = action_data.get("args", {})
+            if action_data.get("action") == "extract_visible_text":
+                # Force auto-scroll unless explicitly disabled
+                if "auto_scroll" not in final_args:
+                    final_args["auto_scroll"] = True
+                    # Also increase chars if not specified
+                    if "max_chars" not in final_args:
+                        final_args["max_chars"] = 12000
+            
             result = self._browser_tools.execute(
                 action_data.get("action", ""),
-                action_data.get("args", {}),
+                final_args,
             )
             
             visited = None
@@ -389,6 +454,7 @@ Data collected:
                             state,
                             messages=[AIMessage(content=f"Skipped duplicate URL: {target_url}")],
                             error=f"Already visited {target_url}, try a different source",
+                            token_usage=token_usage,
                         )
                 visited = target_url
             
@@ -413,6 +479,7 @@ Data collected:
                         state,
                         messages=[AIMessage(content=response.content), tool_msg],
                         visited_url=visited,
+                        token_usage=token_usage,
                     )
                 
                 # Get content
@@ -492,21 +559,68 @@ Data collected:
             
             new_state = self._update_state(
                 state,
-                messages=[AIMessage(content=response.content), tool_msg],
+                messages=[
+                    messages[-1],  # The TEXT-ONLY prompt (crucial for history/memory!)
+                    AIMessage(content=response.content), 
+                    tool_msg
+                ],
                 visited_url=visited,
                 extracted_data=extracted,
                 error=result.message if not result.success else None,
+                token_usage=token_usage,
             )
             
             # Set the updated clicked selectors list
             new_state['clicked_selectors'] = existing_clicked
             
-            # Track scroll state - set flag when scroll, clear when extract
+            # === VISION-BASED SCROLL LOOP DETECTION ===
             if action_data.get("action") == "scroll":
                 new_state['last_action_was_scroll'] = True
-                print("[RESEARCH] 📜 Scrolled - will force extract on next step to update context")
-            elif action_data.get("action") == "extract_visible_text":
+                
+                # Get current scroll position after the scroll
+                try:
+                    scroll_info = self._browser_tools.page.evaluate("""
+                        () => ({
+                            scrollY: window.scrollY,
+                            scrollHeight: document.body.scrollHeight,
+                            clientHeight: window.innerHeight,
+                            atBottom: (window.scrollY + window.innerHeight) >= (document.body.scrollHeight - 50)
+                        })
+                    """)
+                    
+                    last_scroll_y = state.get('_last_scroll_y', 0)
+                    current_scroll_y = scroll_info.get('scrollY', 0)
+                    at_bottom = scroll_info.get('atBottom', False)
+                    
+                    # Detect if scroll actually moved the page
+                    scroll_moved = abs(current_scroll_y - last_scroll_y) > 20
+                    
+                    if at_bottom or not scroll_moved:
+                        scroll_stalls = state.get('_scroll_stall_count', 0) + 1
+                        new_state['_scroll_stall_count'] = scroll_stalls
+                        
+                        if scroll_stalls >= 2:
+                            print(f"[RESEARCH] 👁️ Scroll loop detected (at_bottom={at_bottom}, moved={scroll_moved}) - forcing extract")
+                            new_state['_scroll_stall_count'] = 0
+                            new_state['_reached_page_bottom'] = True
+                        else:
+                            print(f"[RESEARCH] 📜 Scroll may have reached bottom (stall {scroll_stalls}/2)")
+                    else:
+                        # Scroll worked, reset stall counter
+                        new_state['_scroll_stall_count'] = 0
+                        print(f"[RESEARCH] 📜 Scrolled from {last_scroll_y} to {current_scroll_y}")
+                    
+                    new_state['_last_scroll_y'] = current_scroll_y
+                    
+                except Exception as e:
+                    print(f"[RESEARCH] Scroll position check warning: {e}")
+                    new_state['last_action_was_scroll'] = True
+            else:
+                # Clear scroll state for non-scroll actions (navigating away, extracting, etc.)
                 new_state['last_action_was_scroll'] = False
+                new_state['_scroll_stall_count'] = 0
+                new_state['_reached_page_bottom'] = False  # Reset on navigation
+                new_state['_last_scroll_y'] = 0  # Reset scroll position
             
             return new_state
             
@@ -533,16 +647,40 @@ Data collected:
             
             # Validate action
             if not data.get("action"):
-                # Default to text extraction instead of done
+                # Default to text extraction with auto-scroll
                 return {
                     "action": "extract_visible_text",
-                    "args": {"max_chars": 8000}
+                    "args": {"max_chars": 12000, "auto_scroll": True}
                 }
                 
+            # Handle Recall Actions
+            if action_data.get("action") in ["search_runs", "get_run_details"]:
+                if self.recall_tool:
+                    print(f"[RESEARCH] 🧠 Using Recall Tool: {action_data.get('action')}")
+                    result = self.recall_tool.execute(action_data.get("action"), action_data.get("args", {}))
+                    
+                    # Create helpful message with results
+                    content_preview = str(result.data)[:500] + "..." if result.success else result.message
+                    
+                    tool_msg = HumanMessage(content=f"Recall Result ({'Success' if result.success else 'Failed'}):\n{result.message}")
+                    
+                    return self._update_state(
+                        state,
+                        messages=[AIMessage(content=response.content), tool_msg],
+                        extracted_data={"recall_findings": result.data} if result.success else {},
+                        token_usage=token_usage,
+                    )
+                else:
+                    return self._update_state(
+                         state,
+                         messages=[AIMessage(content=response.content), HumanMessage(content="Error: Recall tool not available in this session.")],
+                         error="Recall tool not initialized",
+                    )
+
             return data
         except json.JSONDecodeError:
             # On parse failure, extract instead of quitting
-            return {"action": "extract_visible_text", "args": {"max_chars": 8000}}
+            return {"action": "extract_visible_text", "args": {"max_chars": 12000, "auto_scroll": True}}
 
 
 def research_agent_node(state: AgentState) -> AgentState:
@@ -554,12 +692,14 @@ def research_agent_node(state: AgentState) -> AgentState:
     if tools:
         agent_config = tools.config
         browser_tools = tools.browser_tools
+        recall_tool = tools.recall_tool
     else:
         from ...config import AgentConfig
         agent_config = AgentConfig()
         browser_tools = None
+        recall_tool = None
     
-    agent = ResearchAgentNode(agent_config, browser_tools)
+    agent = ResearchAgentNode(agent_config, browser_tools, recall_tool)
     return agent.execute(state)
 
 

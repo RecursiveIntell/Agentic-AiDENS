@@ -23,6 +23,7 @@ from ..settings_store import SettingsStore, get_settings
 from ..providers import Provider, PROVIDER_DISPLAY_NAMES
 
 from .settings_dialog import SettingsDialog
+from .cost_dialog import CostDialog
 
 
 # Dark theme colors
@@ -183,6 +184,9 @@ class MainWindow(QMainWindow):
         self._current_step = 0
         self._output_buffer = ""
         self._capturing_final_answer = False
+        self._step_history: list[dict] = []  # Track steps for final summary
+        self._current_agent = ""
+        self._current_action = ""
         
         self._setup_ui()
         self._connect_signals()
@@ -269,6 +273,16 @@ class MainWindow(QMainWindow):
         """)
         header_layout.addWidget(self.settings_btn)
         
+        self.cost_btn = QPushButton("Costs")
+        self.cost_btn.setStyleSheet(f"""
+            QPushButton {{
+                font-size: 14px;
+                padding: 10px 14px;
+                background: {DARK_SURFACE_LIGHT};
+            }}
+        """)
+        header_layout.addWidget(self.cost_btn)
+        
         layout.addLayout(header_layout)
         
         # Main content splitter
@@ -346,12 +360,25 @@ class MainWindow(QMainWindow):
         
         self.step_count_label = QLabel("Ready")
         self.status_bar.addPermanentWidget(self.step_count_label)
+        
+        self.input_tokens_label = QLabel("In: 0")
+        self.input_tokens_label.setStyleSheet(f"color: {DARK_INFO}; padding-left: 10px;")
+        self.status_bar.addPermanentWidget(self.input_tokens_label)
+        
+        self.output_tokens_label = QLabel("Out: 0")
+        self.output_tokens_label.setStyleSheet(f"color: {DARK_INFO}; padding-left: 10px;")
+        self.status_bar.addPermanentWidget(self.output_tokens_label)
+        
+        self.cost_label = QLabel("Cost: $0.0000")
+        self.cost_label.setStyleSheet(f"color: {DARK_WARNING}; font-weight: bold; padding-left: 10px;")
+        self.status_bar.addPermanentWidget(self.cost_label)
     
     def _connect_signals(self):
         """Connect UI signals."""
         self.run_btn.clicked.connect(self._on_run)
         self.stop_btn.clicked.connect(self._on_stop)
         self.settings_btn.clicked.connect(self._on_settings)
+        self.cost_btn.clicked.connect(self._on_cost_settings)
         self.goal_edit.returnPressed.connect(self._on_run)
     
     def _update_status_bar(self):
@@ -419,12 +446,17 @@ class MainWindow(QMainWindow):
         self.status_text.clear()
         self._current_step = 0
         self._output_buffer = ""
+        self._step_history = []
+        self._current_agent = ""
+        self._current_action = ""
         
         # Log start
         self._log(f"🎯 Goal: {goal}", "info")
         self._log(f"🔌 Provider: {provider_config.display_name}", "dim")
         self._log(f"🤖 Model: {provider_config.effective_model}", "dim")
         self._log(f"📁 Profile: {settings.profile_name}", "dim")
+        if settings.vision_mode:
+            self._log("👁️  Vision Mode: ENABLED", "success")
         if not settings.auto_approve:
             self._log("⚠️  Auto-approve OFF: Approval prompts will appear in TERMINAL", "warning")
         self._log("─" * 50, "dim")
@@ -458,15 +490,22 @@ class MainWindow(QMainWindow):
         if settings.headless:
             cmd.append("--headless")
         
+        if settings.vision_mode:
+            cmd.append("--vision")
+        
+        if settings.debug_mode:
+            cmd.append("--debug")
+        
         # Add API key as environment variable
         env = dict(subprocess.os.environ)
         if provider_config.api_key:
             env["AGENTIC_BROWSER_API_KEY"] = provider_config.api_key
         
-        # Log the command for debugging
-        self._log(f"[DEBUG] Command: agentic-browser run \"{goal}\"", "dim")
-        self._log(f"[DEBUG] Endpoint: {provider_config.endpoint}", "dim")
-        self._log("", "dim")
+        # Log the command for debugging (only in debug mode)
+        if settings.debug_mode:
+            self._log(f"[DEBUG] Command: agentic-browser run \"{goal}\"", "dim")
+            self._log(f"[DEBUG] Endpoint: {provider_config.endpoint}", "dim")
+            self._log("", "dim")
         
         # Start process
         self._process = QProcess(self)
@@ -532,9 +571,28 @@ class MainWindow(QMainWindow):
     
     def _parse_output_line(self, line: str):
         """Parse a line of output to extract step info."""
+        settings = self.store.settings
+        debug_mode = settings.debug_mode
+        
         # Check for approval request (IPC protocol)
         if line.startswith("APPROVAL_REQUEST:"):
             self._handle_approval_request(line[17:])  # Skip prefix
+            return
+            
+        if line.startswith("__GUI_EVENT__"):
+            import json as json_module
+            try:
+                data = json_module.loads(line[13:])
+                if data.get("type") == "usage_update":
+                    total_cost = data.get("total_cost", 0.0)
+                    total_input = data.get("total_input", 0)
+                    total_output = data.get("total_output", 0)
+                    
+                    self.cost_label.setText(f"Cost: ${total_cost:.4f}")
+                    self.input_tokens_label.setText(f"In: {self._format_token_count(total_input)}")
+                    self.output_tokens_label.setText(f"Out: {self._format_token_count(total_output)}")
+            except Exception:
+                pass
             return
         
         # Strip ANSI codes for parsing
@@ -544,77 +602,137 @@ class MainWindow(QMainWindow):
         if not clean_line:
             return
         
-        # Determine log level based on content
-        level = "info"
-        
         # Skip rich formatting lines
         if clean_line.startswith("─") or clean_line.startswith("━"):
             return
         if clean_line.startswith("│") or clean_line.startswith("┃"):
             clean_line = clean_line[1:].strip()
         
-        # Detect patterns
         lower = clean_line.lower()
         
-        if "error" in lower or "failed" in lower or "fatal" in lower:
-            level = "error"
-        elif "success" in lower or "completed" in lower or "✓" in clean_line:
-            level = "success"
-        elif "warning" in lower or "denied" in lower:
-            level = "warning"
-        elif "step" in lower or "action:" in lower:
-            level = "action"
-            # Update step count
-            match = re.search(r"step\s*(\d+)", lower)
-            if match:
-                self._current_step = int(match.group(1))
-                self.step_count_label.setText(f"Step {self._current_step}")
-        elif "goal" in lower:
-            level = "info"
-        elif clean_line.startswith("[") and "]" in clean_line:
-            level = "dim"
+        # === POLISHED MODE: Filter and synthesize ===
+        if not debug_mode:
+            # Skip debug lines entirely
+            if any(x in lower for x in ['[debug]', '[browser debug]', '[research debug]', 
+                                         'parsed decision', 'raw llm response', 'extracted_data keys']):
+                return
+            
+            # Skip internal state logging
+            if clean_line.startswith("[") and "]" in clean_line:
+                # Allow errors and success messages
+                if not any(x in lower for x in ['error', 'success', 'completed', 'downloaded']):
+                    return
         
-        # Log the line
-        self._log(clean_line, level)
-        
-        if "supervisor" in lower and "routing to" in lower:
-            # Capture Supervisor routing
-            msg = clean_line
-            if "Supervisor" in msg:
-                msg = msg.replace("Supervisor", "").replace("→", "").strip()
-                if "routing to" in msg:
-                    domain = msg.split("routing to")[-1].strip()
-                    self.status_text.append(f"🔄 Routing to: {domain}")
-            else:
-                self.status_text.append(f"🔄 {clean_line}")
-        elif "agent active" in lower:
-            # Capture active agent step
-            agent = ""
+        # Detect and track agent actions
+        if "agent active" in lower:
+            agent = "Agent"
             if "research" in lower: agent = "Research"
             elif "browser" in lower: agent = "Browser"
             elif "code" in lower: agent = "Code"
             elif "os" in lower: agent = "OS"
-            else: agent = "Agent"
+            elif "planner" in lower: agent = "Planner"
             
             step_match = re.search(r"step\s*(\d+)", lower)
-            step_num = step_match.group(1) if step_match else "?"
+            step_num = int(step_match.group(1)) if step_match else self._current_step
+            self._current_step = step_num
+            self._current_agent = agent
             
-            self.status_text.append(f"🤖 Step {step_num}: {agent} agent working...")
+            self.step_count_label.setText(f"Step {step_num}")
             
-        # Check for final answer, report, or task completion
+            # Show clean step indicator
+            if debug_mode:
+                self._log(clean_line, "action")
+            else:
+                self._log(f"▸ Step {step_num}: {agent} agent", "action")
+        
+        # Handle thinking model stripped message - shows when reasoning is complete
+        elif "[llm] stripped" in lower and "thinking" in lower:
+            if debug_mode:
+                self._log(clean_line, "dim")
+            else:
+                self._log("  💭 Reasoning complete", "dim")
+        
+        # Track actions
+        elif "action:" in lower:
+            # Extract action name from "[AGENT] Action: xxx" pattern
+            action_match = re.search(r'action:\s*(\w+)', lower)
+            if action_match:
+                self._current_action = action_match.group(1)
+                if debug_mode:
+                    self._log(clean_line, "dim")
+                else:
+                    # Show polished action
+                    action_display = self._current_action.replace('_', ' ').title()
+                    self._log(f"  → {action_display}", "dim")
+        
+        # Track action results
+        elif "✅" in clean_line or "success" in lower:
+            if debug_mode:
+                self._log(clean_line, "success")
+            else:
+                # Extract meaningful result
+                if "downloaded" in lower:
+                    self._log(clean_line, "success")
+                else:
+                    # Don't repeat success messages in polished mode
+                    pass
+            
+            # Record step in history
+            if self._current_agent:
+                self._step_history.append({
+                    "step": self._current_step,
+                    "agent": self._current_agent,
+                    "action": self._current_action,
+                    "result": "success"
+                })
+        
+        elif "⚠️" in clean_line or "warning" in lower:
+            if debug_mode:
+                self._log(clean_line, "warning")
+            # In polished mode, only show critical warnings
+            elif any(x in lower for x in ['blocked', 'captcha', 'failed', 'redirect']):
+                self._log(f"  ⚠ {clean_line.split('⚠️')[-1].strip()[:60]}", "warning")
+        
+        elif "error" in lower or "failed" in lower:
+            self._log(clean_line, "error")
+            if self._current_agent:
+                self._step_history.append({
+                    "step": self._current_step,
+                    "agent": self._current_agent,
+                    "action": self._current_action,
+                    "result": "error"
+                })
+        
+        # Routing info
+        elif "supervisor" in lower and "routing to" in lower:
+            domain_match = re.search(r'routing to\s+(\w+)', lower)
+            domain = domain_match.group(1) if domain_match else "?"
+            if debug_mode:
+                self._log(clean_line, "dim")
+            self.status_text.append(f"🔄 {domain.capitalize()}")
+        
+        # Everything else in debug mode
+        elif debug_mode:
+            # Determine level
+            level = "info"
+            if clean_line.startswith("["):
+                level = "dim"
+            self._log(clean_line, level)
+            
+        # Check for final answer / completion
         is_completion = any(x in lower for x in [
             "final answer", "goal accomplished", "task completed",
             "## report:", "### analysis", "### findings",
-            "completed successfully", "extracted_data keys",
-            "forcing completion"
+            "completed successfully", "forcing completion", "research completed"
         ])
         
         if is_completion:
             self._capturing_final_answer = True
-            self._log(clean_line, "success")  # Log as success
+            # Show final summary before result
+            self._show_execution_summary()
+            self._log(clean_line, "success")
             self.status_text.append(f"\n✅ RESULT:\n{clean_line}")
         elif self._capturing_final_answer:
-            # Check if we should stop capturing (new action or supervisor routing)
             should_stop = any(x in lower for x in [
                 "supervisor →", "routing to", "step ", "agent active",
                 "starting agent", "[debug]", "approval"
@@ -623,8 +741,40 @@ class MainWindow(QMainWindow):
             if should_stop:
                 self._capturing_final_answer = False
             else:
-                # Continue capturing content
                 self.status_text.append(clean_line)
+    
+    def _show_execution_summary(self):
+        """Show synthesized summary of actions taken."""
+        if not self._step_history:
+            return
+        
+        self._log("", "dim")
+        self._log("═" * 50, "dim")
+        self._log("📋 EXECUTION SUMMARY", "info")
+        self._log("─" * 50, "dim")
+        
+        # Group by agent
+        agents_used = {}
+        for step in self._step_history:
+            agent = step.get("agent", "Unknown")
+            if agent not in agents_used:
+                agents_used[agent] = []
+            agents_used[agent].append(step)
+        
+        for agent, steps in agents_used.items():
+            success_count = sum(1 for s in steps if s.get("result") == "success")
+            error_count = sum(1 for s in steps if s.get("result") == "error")
+            
+            status = "✓" if error_count == 0 else "⚠"
+            actions = list(set(s.get("action", "") for s in steps if s.get("action")))
+            actions_str = ", ".join(a.replace('_', ' ') for a in actions[:3])
+            if len(actions) > 3:
+                actions_str += f" +{len(actions)-3} more"
+            
+            self._log(f"  {status} {agent}: {len(steps)} actions ({actions_str})", "dim")
+        
+        self._log("═" * 50, "dim")
+        self._log("", "dim")
     
     def _handle_approval_request(self, json_str: str):
         """Handle approval request from subprocess via IPC protocol."""
@@ -742,6 +892,11 @@ class MainWindow(QMainWindow):
         dialog = SettingsDialog(self)
         if dialog.exec():
             self._update_status_bar()
+            
+    def _on_cost_settings(self):
+        """Open cost settings dialog."""
+        dialog = CostDialog(self)
+        dialog.exec()
     
     def closeEvent(self, event):
         """Handle window close."""
@@ -760,6 +915,15 @@ class MainWindow(QMainWindow):
         
         event.accept()
 
+
+    def _format_token_count(self, count: int) -> str:
+        """Format token count (e.g. 1.234k, 1.5M)."""
+        if count < 1000:
+            return str(count)
+        elif count < 1_000_000:
+            return f"{count/1000:.3f}k"
+        else:
+            return f"{count/1_000_000:.3f}M"
 
 def run_gui():
     """Run the GUI application."""

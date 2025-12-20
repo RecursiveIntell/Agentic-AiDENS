@@ -12,7 +12,10 @@ A Linux-first **multi-agent system** that controls your **web browser**, **local
     *   **LM Studio** (Local LLMs - Llama 3, Qwen 2.5)
 *   **Intelligent Research**: Unique URL tracking, CAPTCHA detection, and automatic content extraction with minimum source requirements.
 *   **Safety Guardrails**: Policy engine with risk-based permissions, typed tool schemas, and user approval for dangerous operations.
-*   **Modern GUI**: Dark-themed interface with real-time progress tracking and settings persistence.
+*   **Strategy Bank 🧠**: Learns from success. Automatically "crystallizes" successful runs into reusable high-level strategies, allowing agents to solve new problems by recalling proven methods.
+*   **Persistent Memory**: SQLite-based session storage (last 150 runs) with semantic search ("recall tool") so agents don't repeat mistakes.
+*   **Modern GUI**: Dark-themed interface with real-time progress tracking, settings persistence, and live "Thinking" indicators.
+*   **n8n Integration**: Trigger external workflows via webhooks with the specialized `WorkflowAgent`.
 *   **Comprehensive Testing**: 14 test suites covering integration, tool schemas, policy engine, and provider adapters.
 
 ## 🤖 Available Agents
@@ -31,6 +34,7 @@ A Linux-first **multi-agent system** that controls your **web browser**, **local
 | **Media** | Video/audio/image processing | "Convert video to MP3" |
 | **Package** | Python/Node.js environment setup | "Create a venv and install Flask" |
 | **Automation** | Notifications & scheduling | "Remind me in 5 minutes" |
+| **Workflow** | n8n/Webhook Integration | "Trigger the content pipeline" |
 | **Retrospective** | Learning from past actions | Improves future task handling |
 
 ## 📦 Installation
@@ -207,7 +211,15 @@ Actions are classified by risk level:
 - **o3 Model Support**: Fixed empty response issues with OpenAI reasoning models
 - **Provider Adapters**: Native adapters for Anthropic, Google GenAI, and OpenAI APIs
 
+### Learning & Stability (v0.5.0)
+- **Strategy Bank**: Agents now learn strategies from successful runs and store them in a persistent database.
+- **Semantic Recall**: Agents use vector search to find relevant past runs and strategies before acting.
+- **n8n Workflow Agent**: New agent for triggering external webhooks and n8n workflows.
+- **Resource Management**: Fixed browser orphan leaks, improved CLI signal handling, and added auto-cleanup for old run logs.
+- **GUI Improvements**: Added "Thinking" indicators for reasoning models, fix for Anthropic 404s, and better error visibility.
+
 ### CLI Features
+- `agentic-browser run --json`: Output machine-readable JSON for pipeline integration
 - `agentic-browser memory --show`: View stored sites/directories/recipes
 - `agentic-browser memory --bootstrap`: Pre-seed common directories
 - `agentic-browser --dry-run`: See planned actions without execution

@@ -137,12 +137,26 @@ Examples:
         help="Enable fast mode: blocks images, fonts, and media for faster page loads",
     )
     
+    run_parser.add_argument(
+        "--vision",
+        action="store_true",
+        default=False,
+        help="Enable vision mode: send page screenshots to LLM for visual understanding",
+    )
+    
     
     run_parser.add_argument(
         "--langsmith",
         action="store_true",
         default=False,
         help="Enable LangSmith tracing (requires LANGCHAIN_API_KEY)",
+    )
+    
+    run_parser.add_argument(
+        "-d", "--debug",
+        action="store_true",
+        default=False,
+        help="Enable debug mode: verbose output with all agent details",
     )
     
     # New safety and debugging flags
@@ -158,6 +172,13 @@ Examples:
         action="store_true",
         default=False,
         help="Show decision rationale for each action (without full chain-of-thought)",
+    )
+    
+    run_parser.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        help="Output result as JSON (useful for n8n integration)",
     )
     
     # GUI command
@@ -232,6 +253,12 @@ def run_command(args: argparse.Namespace) -> int:
     
     # Store explain mode in config for agents to use
     config.explain_mode = getattr(args, 'explain', False)
+    
+    # Set vision mode if explicitly requested
+    if getattr(args, 'vision', False):
+        config.vision_mode = True
+        import logging
+        logging.getLogger(__name__).info(f"Vision mode ENABLED (--vision flag)")
     
     try:
         # Use LangGraph multi-agent architecture
@@ -338,13 +365,17 @@ def run_graph_command(args: argparse.Namespace, config: AgentConfig, console: Co
     from .graph.browser_manager import LazyBrowserManager
     from .os_tools import OSTools
     
+    
     # Enable LangSmith tracing if requested
     if getattr(args, 'langsmith', False):
         configure_tracing(enabled=True)
     
-    console.print("[bold cyan]🔄 Using LangGraph multi-agent architecture[/bold cyan]")
-    console.print(f"[dim]Goal: {config.goal}[/dim]")
-    console.print()
+    json_mode = getattr(args, 'json', False)
+    
+    if not json_mode:
+        console.print("[bold cyan]🔄 Using LangGraph multi-agent architecture[/bold cyan]")
+        console.print(f"[dim]Goal: {config.goal}[/dim]")
+        console.print()
     
     # Initialize OS tools (always available)
     os_tools = OSTools(config)
@@ -360,54 +391,112 @@ def run_graph_command(args: argparse.Namespace, config: AgentConfig, console: Co
         enable_checkpointing=True,
     )
     
+    # Register signal handler for graceful shutdown on SIGTERM (Stop button)
+    import signal
+    def handle_sigterm(signum, frame):
+        import logging
+        logging.getLogger(__name__).warning(f"Received signal {signum}, initiating graceful shutdown...")
+        raise KeyboardInterrupt  # Will be caught by run_graph_command's try/except
+        
+    signal.signal(signal.SIGTERM, handle_sigterm)
+    signal.signal(signal.SIGINT, handle_sigterm)
+    
     try:
         # Stream execution for real-time output
-        console.print("[bold]Starting multi-agent execution...[/bold]")
-        console.print()
+        if not json_mode:
+            console.print("[bold]Starting multi-agent execution...[/bold]")
+            console.print()
+        
+        final_answer = ""
+        final_state = {}
         
         for event in runner.stream(config.goal, config.max_steps):
             # Display agent activity
             for node_name, state_update in event.items():
-                if node_name == "supervisor":
-                    domain = state_update.get("current_domain", "")
-                    console.print(f"[cyan]Supervisor[/cyan] → routing to [yellow]{domain}[/yellow]")
+                if json_mode:
+                    # In JSON mode, we just collect state, no printing
+                     if state_update.get("task_complete"):
+                        final_state = state_update
+                        final_answer = state_update.get("final_answer", "")
                 else:
-                    step = state_update.get("step_count", 0)
-                    console.print(f"  [dim]Step {step}:[/dim] [green]{node_name}[/green] agent active")
+                    if node_name == "supervisor":
+                        domain = state_update.get("current_domain", "")
+                        console.print(f"[cyan]Supervisor[/cyan] → routing to [yellow]{domain}[/yellow]")
+                    else:
+                        step = state_update.get("step_count", 0)
+                        console.print(f"  [dim]Step {step}:[/dim] [green]{node_name}[/green] agent active")
                 
                 # Check for completion
                 if state_update.get("task_complete"):
-                    console.print()
-                    console.print("[bold green]✓ Task completed![/bold green]")
-                    answer = state_update.get("final_answer", "")
-                    if answer:
+                    if json_mode:
+                        import json
+                        output = {
+                            "success": True,
+                            "final_answer": final_answer,
+                            "data": final_state.get("extracted_data", {}),
+                            "steps": final_state.get("step_count", 0)
+                        }
+                        print(json.dumps(output))
+                    else:
                         console.print()
-                        console.print("[bold]Final Answer:[/bold]")
-                        console.print(answer)
+                        console.print("[bold green]✓ Task completed![/bold green]")
+                        answer = state_update.get("final_answer", "")
+                        if answer:
+                            console.print()
+                            console.print("[bold]Final Answer:[/bold]")
+                            console.print(answer)
                     return 0
                 
                 # Check for error
                 error = state_update.get("error")
                 if error:
+                    if json_mode:
+                        import json
+                        print(json.dumps({"success": False, "error": error}))
+                        return 1
                     console.print(f"[red]Error: {error}[/red]")
         
-        console.print("\n[yellow]Execution ended (no explicit completion)[/yellow]")
+        if json_mode:
+             import json
+             print(json.dumps({"success": False, "error": "Task ended without completion"}))
+        else:
+            console.print("\n[yellow]Execution ended (no explicit completion)[/yellow]")
         return 1
         
     except KeyboardInterrupt:
+        if json_mode:
+            return 130
         console.print("\n[yellow]Interrupted by user[/yellow]")
-        return 1
+        return 130
         
     except Exception as e:
+        error_msg = str(e).lower()
+        if json_mode:
+            import json
+            print(json.dumps({"success": False, "error": str(e)}))
+            return 1
+
+        # Handle empty model response errors with helpful message
+        empty_patterns = ["empty", "must contain", "output text", "tool calls", "cannot both be empty"]
+        if any(p in error_msg for p in empty_patterns):
+            console.print("\n[red bold]⚠️ Model returned empty response[/red bold]")
+            console.print("[yellow]This usually means:[/yellow]")
+            console.print("  • LM Studio needs to be restarted")
+            console.print("  • The model is too small or incompatible")
+            console.print("  • Try a different model (e.g., mistral-7b-instruct)")
+            return 1
+        
         console.print(f"\n[red]Graph execution error: {e}[/red]")
         import traceback
         traceback.print_exc()
         return 1
         
     finally:
-        # Cleanup
         runner.cleanup()
         browser_manager.close()
+        # Close session store
+        if hasattr(runner, 'session_store') and runner.session_store:
+            runner.session_store.close()
 
 
 def gui_command() -> int:

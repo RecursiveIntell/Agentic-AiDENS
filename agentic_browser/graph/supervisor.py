@@ -14,6 +14,7 @@ from langchain_openai import ChatOpenAI
 from .state import AgentState
 from ..domain_router import DomainRouter
 from ..config import AgentConfig
+from ..cost import calculate_cost
 
 logger = logging.getLogger("agentic_browser.supervisor")
 
@@ -38,6 +39,7 @@ AVAILABLE AGENTS:
 - media: Video/audio conversion (ffmpeg), image resize/compress
 - package: Python venv, pip install, git clone, project setup
 - automation: Desktop notifications, scheduling, reminders, timers
+- workflow: n8n workflow integration, trigger webhooks, external automation
 
 ROUTING STRATEGY:
 Analyze the goal and route to the most appropriate agent:
@@ -51,6 +53,7 @@ Analyze the goal and route to the most appropriate agent:
 - Convert video, resize image → media
 - Create venv, install packages → package
 - Remind me, notify, schedule, timer → automation
+- Trigger n8n, run workflow, webhook → workflow
 
 MULTI-STEP TASKS:
 Some goals require multiple agents:
@@ -65,9 +68,15 @@ INTELLIGENT COMPLETION:
 - SATISFICING: If you have 3-4 solid facts/sources, that is ENOUGH. Do not aim for perfection.
 - If total step count > 15, aggressively wrap up and complete.
 
+ADAPTIVE EXECUTION:
+- The Implementation Plan is a GUIDE, not a script.
+- DEVIATE if reality differs from the plan.
+- If the plan says "Research" but you need to solve a Captcha, route to "Browser".
+- If an agent fails repeatedly, try a different approach (e.g., Code instead of Research).
+
 Respond with JSON:
 {
-  "route_to": "os|code|research|browser|data|network|sysadmin|media|package|automation|done",
+  "route_to": "os|code|research|browser|data|network|sysadmin|media|package|automation|workflow|done",
   "rationale": "why this agent or why completing"
 }
 
@@ -112,10 +121,11 @@ When completing, synthesize ALL gathered data into a useful report:
         except Exception as e:
             error_msg = str(e).lower()
             
-            # Handle empty response errors from provider
-            if "empty" in error_msg or "must contain" in error_msg:
-                print(f"[WARN] Empty response error: {e}")
-                return AIMessage(content='{"route_to": "done", "rationale": "Model error", "final_answer": "Model returned empty response - please try again"}')
+            # Handle empty response errors from provider - catch all variations
+            empty_patterns = ["empty", "must contain", "output text", "tool calls", "cannot both be empty"]
+            if any(p in error_msg for p in empty_patterns):
+                print(f"[WARN] Empty/invalid response error: {e}")
+                return AIMessage(content='{"route_to": "done", "rationale": "Model error", "final_answer": "Model returned empty response - please try a different model"}')
             
             # Check for 404 / model not found errors
             if "404" in error_msg or "not_found" in error_msg or "model" in error_msg and "not found" in error_msg:
@@ -158,6 +168,39 @@ When completing, synthesize ALL gathered data into a useful report:
             # Catch-all: return a fallback response instead of crashing
             print(f"[WARN] Unhandled LLM error, returning fallback: {e}")
             return AIMessage(content='{"route_to": "done", "rationale": "LLM error", "final_answer": "An error occurred with the model. Please try again."}')
+            
+    def update_token_usage(self, state: AgentState, response: AIMessage) -> dict:
+        """Calculate and return updated token usage stats.
+        
+        Args:
+            state: Current state
+            response: LLM response
+            
+        Returns:
+            Updated token_usage dict
+        """
+        current = state.get("token_usage", {
+            "input_tokens": 0.0,
+            "output_tokens": 0.0,
+            "total_tokens": 0.0,
+            "total_cost": 0.0,
+        })
+        
+        usage = getattr(response, "usage_metadata", {}) or {}
+        input_tokens = usage.get("input_tokens", 0)
+        output_tokens = usage.get("output_tokens", 0)
+        
+        if not input_tokens and not output_tokens:
+            return current
+            
+        cost = calculate_cost(self.config.model, input_tokens, output_tokens)
+        
+        return {
+            "input_tokens": current["input_tokens"] + input_tokens,
+            "output_tokens": current["output_tokens"] + output_tokens,
+            "total_tokens": current["total_tokens"] + input_tokens + output_tokens,
+            "total_cost": current["total_cost"] + cost,
+        }
     
     def route(self, state: AgentState) -> AgentState:
         """Decide which agent should handle the current state.
@@ -170,6 +213,17 @@ When completing, synthesize ALL gathered data into a useful report:
         """
         # Check if we're done
         if state.get("task_complete"):
+            # PRIORITY: End-of-Run Retrospective
+            # If we haven't run retrospective yet, do it now.
+            if not state.get("retrospective_ran", False):
+                 return {
+                     **state,
+                     "current_domain": "retrospective", 
+                     "active_agent": "supervisor",
+                     # Temporarily unset task_complete so we don't exit graph
+                     "task_complete": False 
+                 }
+            
             return {
                 **state,
                 "current_domain": "done",
@@ -212,6 +266,9 @@ When completing, synthesize ALL gathered data into a useful report:
             
             decision = self._parse_decision(response.content, state.get("current_domain", "research"))
             
+            # Update token usage
+            token_usage = self.update_token_usage(state, response)
+            
             # DEBUG: Print parsed decision
             print(f"[DEBUG] Supervisor - Parsed Decision: {decision}")
             print(f"[DEBUG] Supervisor - Current step: {state['step_count']}, extracted_data keys: {list(state['extracted_data'].keys())}")
@@ -238,7 +295,9 @@ When completing, synthesize ALL gathered data into a useful report:
                     "current_domain": "done",
                     "task_complete": True,
                     "final_answer": self._synthesize_report(state),
+                    "final_answer": self._synthesize_report(state),
                     "messages": [AIMessage(content=response.content)],
+                    "token_usage": token_usage,
                 }
             
             # HARD BLOCK: Minimum steps before allowing completion
@@ -296,12 +355,16 @@ When completing, synthesize ALL gathered data into a useful report:
             # Success - reset consecutive errors
             state["consecutive_errors"] = 0
             
+            route_to = decision.get("route_to", state["current_domain"])
             return {
                 **state,
-                "current_domain": decision.get("route_to", state["current_domain"]),
-                "active_agent": "supervisor",
-                "step_count": state["step_count"] + 1,
+                "current_domain": route_to,
+                "active_agent": "supervisor" if route_to == "done" else route_to,
                 "messages": [AIMessage(content=response.content)],
+                "task_complete": route_to == "done",
+                "final_answer": decision.get("final_answer"),
+                "token_usage": token_usage,
+                "step_count": state["step_count"] + 1,
                 "consecutive_errors": 0,
             }
             
@@ -364,6 +427,11 @@ When completing, synthesize ALL gathered data into a useful report:
         if any(k in goal_lower for k in automation_keywords):
             return "automation"
         
+        # Workflow agent keywords
+        workflow_keywords = ["n8n", "webhook", "workflow", "trigger", "automate"]
+        if any(k in goal_lower for k in workflow_keywords):
+            return "workflow"
+        
         if domain == "browser":
             # Check for research intent
             research_keywords = ["research", "find out", "look up", "synthesize", "compare", "what is", "who is", "search"]
@@ -406,13 +474,33 @@ When completing, synthesize ALL gathered data into a useful report:
             formatted_data.append(f"--- Other Data ---\n{json.dumps(other_data, indent=2)[:remaining_chars]}")
             
         data_str = "\n\n".join(formatted_data)
+        
+        # Format implementation plan if exists (Planning-First Architecture)
+        plan_str = ""
+        plan = state.get("implementation_plan")
+        if plan and isinstance(plan, dict):
+            steps = plan.get("steps", [])
+            plan_step_idx = state.get("plan_step_index", 0)
+            plan_str = f"""
+=== IMPLEMENTATION PLAN ===
+Goal Analysis: {plan.get('goal_analysis', 'N/A')}
+Total Steps: {len(steps)}
+Current Plan Step: {plan_step_idx + 1} of {len(steps)}
+
+Steps:
+"""
+            for i, s in enumerate(steps):
+                marker = "→ " if i == plan_step_idx else "  "
+                plan_str += f"{marker}Step {s.get('step', i+1)}: [{s.get('agent', '?')}] {s.get('action', 'N/A')}\n"
+                plan_str += f"     Success Criteria: {s.get('success_criteria', 'N/A')}\n"
+            plan_str += "===========================\n"
 
         # Summarize current state
         context = f"""
 User's Goal: {state['goal']}
 Current Step: {state['step_count']} / {state['max_steps']}
 Current Domain: {state['current_domain']}
-
+{plan_str}
 Data Collected:
 {data_str}
 
@@ -424,8 +512,10 @@ Last Error: {state.get('error', 'None')}
 Recent Messages:
 {self._format_recent_messages(state)}
 
-Should the task continue? If so, which agent should handle it next?
-If the worker agent completed with a final answer, synthesize and return done.
+Follow the IMPLEMENTATION PLAN above as a reference.
+Route to the agent for the current plan step, BUT deviate if necessary (adaptive execution).
+If the current step's success criteria is met, advance to the next step.
+If all steps are complete, synthesize and return done.
 """
         
         return [
@@ -460,9 +550,12 @@ If the worker agent completed with a final answer, synthesize and return done.
                 content = content[start:end+1]
             return json.loads(content)
         except json.JSONDecodeError:
-            # On parse failure, continue with current agent instead of switching to code
-            logger.debug(f"Supervisor - JSON parse failed, continuing with {current_domain} agent")
-            return {"route_to": current_domain, "rationale": "Failed to parse response"}
+            # Smarter fallback - check goal context for image tasks
+            logger.debug(f"Supervisor - JSON parse failed, checking goal context")
+            
+            # Note: current_domain is passed as arg, but we need goal from somewhere
+            # For now, prefer browser for parse failures as it's the safest fallback
+            return {"route_to": "browser", "rationale": "Parse failed, defaulting to browser"}
     
     def _map_domain(self, domain: str) -> str:
         """Map DomainRouter domain to agent names."""
@@ -595,7 +688,7 @@ def supervisor_node(state: AgentState) -> AgentState:
 
 def route_to_agent(state: AgentState) -> Literal[
     "browser", "os", "research", "code", "sysadmin", 
-    "network", "media", "package", "automation", "data", "__end__"
+    "network", "media", "package", "automation", "data", "workflow", "__end__"
 ]:
     """Conditional edge function for routing.
     
@@ -609,7 +702,7 @@ def route_to_agent(state: AgentState) -> Literal[
     # All valid agent routes
     valid_agents = {
         "browser", "os", "research", "code", "sysadmin",
-        "network", "media", "package", "automation", "data"
+        "network", "media", "package", "automation", "data", "workflow"
     }
     
     if domain in valid_agents:

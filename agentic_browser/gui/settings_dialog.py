@@ -147,6 +147,14 @@ class SettingsDialog(QDialog):
         self.auto_approve_check = QCheckBox("Auto-approve medium-risk actions")
         agent_layout.addRow("", self.auto_approve_check)
         
+        self.vision_check = QCheckBox("Enable Vision Mode (send screenshots to LLM)")
+        self.vision_check.setToolTip("Enables the agent to 'see' the page via screenshots. Works with VL models like qwen-vl, llava, gpt-4o, etc.")
+        agent_layout.addRow("", self.vision_check)
+        
+        self.debug_check = QCheckBox("Debug Mode (verbose output)")
+        self.debug_check.setToolTip("When OFF: Clean, polished output. When ON: Full debug info for troubleshooting.")
+        agent_layout.addRow("", self.debug_check)
+        
         layout.addWidget(agent_group)
         
         # Buttons
@@ -192,12 +200,18 @@ class SettingsDialog(QDialog):
         self.max_steps_spin.setValue(settings.max_steps)
         self.headless_check.setChecked(settings.headless)
         self.auto_approve_check.setChecked(settings.auto_approve)
+        self.vision_check.setChecked(settings.vision_mode)
+        self.debug_check.setChecked(settings.debug_mode)
         
         # Update provider-specific UI (this loads the correct API key)
         self._on_provider_changed()
         
-        # Set model after updating suggestions
+        # Set model after updating suggestions - IMPORTANT: add to combo if not present
         if settings.model:
+            # If the saved model isn't in the suggestions, add it
+            # This handles LM Studio models that were fetched but aren't in defaults
+            if self.model_combo.findText(settings.model) == -1:
+                self.model_combo.addItem(settings.model)
             self.model_combo.setCurrentText(settings.model)
     
     def _on_provider_changed(self):
@@ -229,15 +243,22 @@ class SettingsDialog(QDialog):
         else:
             self.api_key_edit.setPlaceholderText("Not required for LM Studio")
         
-        # Update model suggestions
+        # Update model suggestions - use saved models if available, otherwise defaults
         self.model_combo.clear()
-        suggestions = PROVIDER_MODEL_SUGGESTIONS.get(provider, [])
-        self.model_combo.addItems(suggestions)
+        saved_models = self.store.settings.get_models_for_provider(provider_value)
+        if saved_models:
+            # Use previously fetched models
+            self.model_combo.addItems(saved_models)
+        else:
+            # Fall back to default suggestions
+            suggestions = PROVIDER_MODEL_SUGGESTIONS.get(provider, [])
+            self.model_combo.addItems(suggestions)
         
-        # Set default model
-        default_model = PROVIDER_DEFAULT_MODELS.get(provider, "")
-        if default_model in suggestions:
-            self.model_combo.setCurrentText(default_model)
+        # Set default model if nothing selected
+        if self.model_combo.count() > 0 and not self.model_combo.currentText():
+            default_model = PROVIDER_DEFAULT_MODELS.get(provider, "")
+            if self.model_combo.findText(default_model) != -1:
+                self.model_combo.setCurrentText(default_model)
         
         # Update default endpoint label
         default_endpoint = PROVIDER_ENDPOINTS.get(provider, "")
@@ -303,7 +324,12 @@ class SettingsDialog(QDialog):
             if current_model in models:
                 self.model_combo.setCurrentText(current_model)
             
-            self.model_status_label.setText(f"Found {len(models)} models")
+            # Save fetched models for this provider so they persist
+            provider_value = self.provider_combo.currentData()
+            self.store.settings.set_models_for_provider(provider_value, models)
+            self.store.save()  # Persist immediately
+            
+            self.model_status_label.setText(f"Found {len(models)} models (saved)")
             self.model_status_label.setStyleSheet("color: #28a745; font-size: 11px;")
         else:
             self.model_status_label.setText("No models found")
@@ -349,6 +375,8 @@ class SettingsDialog(QDialog):
             max_steps=self.max_steps_spin.value(),
             headless=self.headless_check.isChecked(),
             auto_approve=self.auto_approve_check.isChecked(),
+            vision_mode=self.vision_check.isChecked(),
+            debug_mode=self.debug_check.isChecked(),
         )
         
         self.accept()

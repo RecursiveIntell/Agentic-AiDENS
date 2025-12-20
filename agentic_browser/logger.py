@@ -66,6 +66,32 @@ class RunLogger:
         
         self.step_count = 0
         
+        # Cleanup old runs to prevent disk bloat
+        self._cleanup_old_runs()
+        
+    def _cleanup_old_runs(self, max_runs: int = 50) -> None:
+        """Keep only the N most recent runs."""
+        try:
+            runs_dir = get_runs_dir()
+            if not runs_dir.exists():
+                return
+                
+            # Get all run directories
+            all_runs = sorted(
+                [d for d in runs_dir.iterdir() if d.is_dir()],
+                key=lambda d: d.stat().st_mtime,
+                reverse=True
+            )
+            
+            # Delete older runs
+            if len(all_runs) > max_runs:
+                for run_to_delete in all_runs[max_runs:]:
+                    try:
+                        shutil.rmtree(run_to_delete)
+                    except Exception:
+                        pass
+        except Exception:
+            pass  # Non-critical background task        
     @property
     def run_path(self) -> Path:
         """Get the path to the run directory."""

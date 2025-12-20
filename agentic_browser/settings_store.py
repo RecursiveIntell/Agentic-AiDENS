@@ -32,6 +32,9 @@ class Settings:
     # Per-provider API keys (new: stores each provider's key separately)
     provider_api_keys: Dict[str, str] = field(default_factory=dict)
     
+    # Per-provider fetched model lists (stores refreshed models for each provider)
+    provider_models: Dict[str, list] = field(default_factory=dict)
+    
     # OS domain provider settings
     routing_mode: str = "auto"  # auto | browser | os | ask
     os_provider: str = "lm_studio"
@@ -46,10 +49,17 @@ class Settings:
     # Agent settings
     max_steps: int = 30
     auto_approve: bool = False
+    vision_mode: bool = False  # Enable vision (screenshots to LLM)
+    debug_mode: bool = True    # Verbose debug output (default ON for now)
     
     # Window settings
     window_width: int = 900
     window_height: int = 700
+    
+    # n8n Integration Settings
+    n8n_url: Optional[str] = None
+    n8n_api_key: Optional[str] = None
+    n8n_webhooks: Dict[str, str] = field(default_factory=dict)
     
     # LangSmith tracing settings
     langsmith_enabled: bool = False
@@ -72,6 +82,14 @@ class Settings:
             self.provider_api_keys[provider_value] = api_key
         elif provider_value in self.provider_api_keys:
             del self.provider_api_keys[provider_value]
+    
+    def get_models_for_provider(self, provider_value: str) -> list:
+        """Get saved model list for a provider."""
+        return self.provider_models.get(provider_value, [])
+    
+    def set_models_for_provider(self, provider_value: str, models: list) -> None:
+        """Save model list for a provider."""
+        self.provider_models[provider_value] = models
     
     def get_provider_config(self) -> ProviderConfig:
         """Get the provider configuration."""
@@ -143,17 +161,25 @@ class SettingsStore:
                     custom_endpoint=data.get("custom_endpoint"),
                     # Per-provider API keys
                     provider_api_keys=data.get("provider_api_keys", {}),
+                    # Per-provider model lists
+                    provider_models=data.get("provider_models", {}),
                     # OS domain settings
                     routing_mode=data.get("routing_mode", "auto"),
                     os_provider=data.get("os_provider", "lm_studio"),
                     os_api_key=data.get("os_api_key"),
                     os_model=data.get("os_model"),
                     os_custom_endpoint=data.get("os_custom_endpoint"),
+                    # n8n Integration Settings
+                    n8n_url=data.get("n8n_url"),
+                    n8n_api_key=data.get("n8n_api_key"),
+                    n8n_webhooks=data.get("n8n_webhooks", {}),
                     # Other settings
                     profile_name=data.get("profile_name", "default"),
                     headless=data.get("headless", False),
                     max_steps=data.get("max_steps", 30),
                     auto_approve=data.get("auto_approve", False),
+                    vision_mode=data.get("vision_mode", False),
+                    debug_mode=data.get("debug_mode", True),
                     window_width=data.get("window_width", 900),
                     window_height=data.get("window_height", 700),
                 )
@@ -174,17 +200,25 @@ class SettingsStore:
             "custom_endpoint": self._settings.custom_endpoint,
             # Per-provider API keys
             "provider_api_keys": self._settings.provider_api_keys,
+            # Per-provider model lists
+            "provider_models": self._settings.provider_models,
             # OS domain settings
             "routing_mode": self._settings.routing_mode,
             "os_provider": self._settings.os_provider,
             "os_api_key": self._settings.os_api_key,
             "os_model": self._settings.os_model,
             "os_custom_endpoint": self._settings.os_custom_endpoint,
+            # n8n Integration Settings
+            "n8n_url": self._settings.n8n_url,
+            "n8n_api_key": self._settings.n8n_api_key,
+            "n8n_webhooks": self._settings.n8n_webhooks,
             # Other settings
             "profile_name": self._settings.profile_name,
             "headless": self._settings.headless,
             "max_steps": self._settings.max_steps,
             "auto_approve": self._settings.auto_approve,
+            "vision_mode": self._settings.vision_mode,
+            "debug_mode": self._settings.debug_mode,
             "window_width": self._settings.window_width,
             "window_height": self._settings.window_height,
         }
