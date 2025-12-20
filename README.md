@@ -179,6 +179,17 @@ Actions are classified by risk level:
 
 ## 📈 Recent Updates
 
+### Performance & Stability (v0.6.0)
+- **Smart Context Compression**: Intelligent synthesis that extracts key info and compresses history to 18k chars (preferring 3.5k-5k), preventing context explosion and 429 errors.
+- **Deep Performance Tuning**: 
+    - Reduced Playwright `click` timeouts to 1.5s and `evaluate` to 5s.
+    - Added 30s timeout guard to `page.goto` to prevent indefinite hangs.
+    - Vision mode `detail: low` optimization, saving ~90% of screenshot tokens.
+    - Disabled LangGraph `MemorySaver` to eliminate exponential memory growth and "Step 13" hangs.
+- **Apocalypse Learning**: Automatically extracts error patterns from failures and saves them to a "Apocalypse Bank" to proactively avoid repeating mistakes.
+- **Secure Strategy Storage**: AES-256 encryption for all learned strategies and apocalypse entries using a machine-specific hardware ID.
+- **Improved GUI Snappiness**: Background pre-warming for embedding models and cleaner browser UI with `--disable-infobars`.
+
 ### Research Agent Improvements (v0.4.0)
 - **Unique URL Tracking**: Counts unique content URLs visited (excluding search engines) rather than extraction count
 - **CAPTCHA Detection**: Automatically detects blocked/CAPTCHA pages and marks them as visited to break loops

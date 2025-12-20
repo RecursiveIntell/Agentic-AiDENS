@@ -42,10 +42,11 @@ Available actions:
 
 === SYSTEMATIC RESEARCH WORKFLOW ===
 
-STEP 0: CHECK HISTORY (STRATEGIC)
-- Before researching from scratch, check if we've done this before!
-- Action: {"action": "search_runs", "args": {"query": "your topic"}}
-- If you find a matching successful run, use its findings.
+STEP 0: CHECK MEMORY (AUTO-INJECTED)
+- I will auto-inject PROVEN STRATEGIES from your encrypted bank.
+- I will auto-inject MISTAKES TO AVOID from your Apocalypse bank.
+- I will also show RAW INSIGHTS from recent runs.
+- PRIORITIZE encrypted banks, but consider raw insights for innovation!
 
 STEP 1: SEARCH
 - Go to DuckDuckGo: {"action": "goto", "args": {"url": "https://duckduckgo.com/?q=your+search+terms"}}
@@ -291,14 +292,16 @@ URL: {current_url}
 {action_hint}
 
 Visible content (truncated):
-{page_state.get('visible_text', '')[:2000]}
+{page_state.get('visible_text', '')[:800]}
 
-Data collected:
-{json.dumps(state['extracted_data'], indent=2)[:1000]}
+Data collected (summary):
+{json.dumps(state['extracted_data'], indent=2)[:500] if state['extracted_data'] else '(none yet)'}
 """
 
         # Vision mode: capture screenshot for LLM
+        # Now cost-effective with detail=low (~500 tokens vs ~5k with high)
         screenshot_b64 = None
+        
         if self.config.vision_mode and self._browser_tools:
             screenshot_b64 = self.capture_screenshot_base64(self._browser_tools)
             if screenshot_b64:
@@ -311,6 +314,22 @@ Use the screenshot to:
 - Find the actual text of links instead of guessing
 """
                 print("[RESEARCH] Vision mode: screenshot captured")
+        
+        # TIERED RECALL INJECTION (Strategies > Apocalypse > Raw Runs)
+        # Only on first step to avoid repeated slow embedding computations
+        step_count = state.get('step_count', 0)
+        if step_count <= 1:
+            try:
+                from ..knowledge_base import get_knowledge_base
+                kb = get_knowledge_base()
+                recall_result = kb.tiered_recall("research", state['goal'])
+                recall_context = recall_result.to_prompt_injection()
+                
+                if recall_context:
+                    task_context = f"{recall_context}\n\n---\n\n{task_context}"
+                    print("[RESEARCH] 🧠 Injected tiered recall context")
+            except Exception as e:
+                print(f"[RESEARCH] ⚠️ Tiered recall failed: {e}")
         
         # Build messages with optional vision
         # NOTE: This creates the messages list including the new HumanMessage prompt at the end
@@ -389,6 +408,15 @@ Use the screenshot to:
                 action_data["action"] = "scroll"
                 action_data["args"] = {"amount": 800}
             
+            # RATE LIMIT: Detect consecutive scroll actions and force extract instead
+            if action_data.get("action") == "scroll":
+                recent_actions_list = state.get('recent_actions', [])
+                # Count recent scrolls in last 3 actions
+                recent_scrolls = sum(1 for a in recent_actions_list[-3:] if a == "scroll")
+                if recent_scrolls >= 2:
+                    print(f"[RESEARCH] 🛑 Blocking repeated scroll (seen {recent_scrolls} scrolls) - forcing extract")
+                    action_data = {"action": "extract_visible_text", "args": {"max_chars": 8000, "auto_scroll": False}}
+            
             # Detect duplicate click and force scroll instead
             if action_data.get("action") == "click":
                 selector = action_data.get("args", {}).get("selector", "")
@@ -425,17 +453,31 @@ Use the screenshot to:
             # Execute browser action
             final_args = action_data.get("args", {})
             if action_data.get("action") == "extract_visible_text":
-                # Force auto-scroll unless explicitly disabled
+                # Only auto-scroll on first extraction of a page (avoid repeated slow scrolling)
+                current_url = page_state.get('current_url', '') or page_state.get('url', '')
+                scrolled_urls = state.get('scrolled_urls', [])
+                
+                # Check if we've already scrolled this URL
+                url_base = current_url.split('?')[0].rstrip('/')
+                already_scrolled = any(u.split('?')[0].rstrip('/') == url_base for u in scrolled_urls)
+                
                 if "auto_scroll" not in final_args:
-                    final_args["auto_scroll"] = True
-                    # Also increase chars if not specified
-                    if "max_chars" not in final_args:
-                        final_args["max_chars"] = 12000
+                    final_args["auto_scroll"] = not already_scrolled  # Only scroll first time
+                    if already_scrolled:
+                        print(f"[RESEARCH] Skipping auto_scroll (already scrolled this page)")
+                
+                # Also increase chars if not specified
+                if "max_chars" not in final_args:
+                    final_args["max_chars"] = 12000
             
             result = self._browser_tools.execute(
                 action_data.get("action", ""),
                 final_args,
             )
+            
+            # Track this URL as scrolled if we just did auto_scroll
+            if action_data.get("action") == "extract_visible_text" and final_args.get("auto_scroll"):
+                scrolled_url = current_url  # Will be added to state later
             
             visited = None
             if action_data.get("action") == "goto":
@@ -576,6 +618,12 @@ Use the screenshot to:
             # === VISION-BASED SCROLL LOOP DETECTION ===
             if action_data.get("action") == "scroll":
                 new_state['last_action_was_scroll'] = True
+                # Track this page as scrolled so browser agent skips redundant scrolling
+                new_state['scrolled_urls'] = [current_url]
+            
+            # Also track scrolled_urls for extract_visible_text with auto_scroll
+            if action_data.get("action") == "extract_visible_text" and final_args.get("auto_scroll"):
+                new_state['scrolled_urls'] = [current_url]
                 
                 # Get current scroll position after the scroll
                 try:
@@ -653,30 +701,6 @@ Use the screenshot to:
                     "args": {"max_chars": 12000, "auto_scroll": True}
                 }
                 
-            # Handle Recall Actions
-            if action_data.get("action") in ["search_runs", "get_run_details"]:
-                if self.recall_tool:
-                    print(f"[RESEARCH] 🧠 Using Recall Tool: {action_data.get('action')}")
-                    result = self.recall_tool.execute(action_data.get("action"), action_data.get("args", {}))
-                    
-                    # Create helpful message with results
-                    content_preview = str(result.data)[:500] + "..." if result.success else result.message
-                    
-                    tool_msg = HumanMessage(content=f"Recall Result ({'Success' if result.success else 'Failed'}):\n{result.message}")
-                    
-                    return self._update_state(
-                        state,
-                        messages=[AIMessage(content=response.content), tool_msg],
-                        extracted_data={"recall_findings": result.data} if result.success else {},
-                        token_usage=token_usage,
-                    )
-                else:
-                    return self._update_state(
-                         state,
-                         messages=[AIMessage(content=response.content), HumanMessage(content="Error: Recall tool not available in this session.")],
-                         error="Recall tool not initialized",
-                    )
-
             return data
         except json.JSONDecodeError:
             # On parse failure, extract instead of quitting

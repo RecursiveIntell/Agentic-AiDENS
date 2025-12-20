@@ -253,7 +253,7 @@ class BaseAgent(ABC):
 
         try:
             # Simple retry loop for 429 rate limits
-            max_retries = 2
+            max_retries = 3  # Increased from 2 for better recovery
             for attempt in range(max_retries + 1):
                 try:
                     response = self.llm.invoke(messages)
@@ -287,10 +287,14 @@ class BaseAgent(ABC):
                             time.sleep(wait_time)
                             continue
                         
-                        # OTHER PROVIDERS: Just log it, maybe one retry without sleep if max_retries allows
+                        # OPENAI/OTHER PROVIDERS: Wait 5s minimum (OpenAI needs ~3s)
                         elif attempt < max_retries:
-                             print(f"[WARN] Rate limit hit (429) on non-Anthropic provider. Retrying immediately.")
-                             continue
+                            wait_time = 5 * (attempt + 1)  # 5s, 10s, 15s (was 2s, 4s)
+                            print(f"[WARN] Rate limit hit (429). Waiting {wait_time}s...")
+                            notify_gui(f"Rate limit (429). Waiting {wait_time}s...", is_error=False)
+                            import time
+                            time.sleep(wait_time)
+                            continue
                     
                     # Re-raise if not a rate limit or retries exhausted
                     raise inner_e
@@ -403,7 +407,7 @@ class BaseAgent(ABC):
                     "type": "image_url",
                     "image_url": {
                         "url": f"data:image/png;base64,{screenshot_b64}",
-                        "detail": "high"  # high detail for better accuracy
+                        "detail": "low"  # low detail to save tokens (high uses ~5k extra)
                     }
                 }
             ])
@@ -435,6 +439,13 @@ class BaseAgent(ABC):
         # 3. Aggressively strip content if over safe limits (avoid 413 errors)
         
         all_msgs = state["messages"]
+        
+        # CRITICAL: Hard cap on messages to prevent unbounded growth
+        # operator.add accumulates forever without this
+        MAX_MESSAGES = 40
+        if len(all_msgs) > MAX_MESSAGES:
+            all_msgs = all_msgs[-MAX_MESSAGES:]
+        
         recent_count = 10
         
         # Check provider type for safety limits
@@ -446,14 +457,14 @@ class BaseAgent(ABC):
         # Determine total estimated size
         total_chars = sum(len(str(m.content)) for m in all_msgs)
         
-        # ANTHROPIC SPECIFIC LIMIT: 60k chars to avoid strict TPM/Size limits
-        # OTHERS: 200k chars (basically unlimited for recent GPT-4/Gemini models)
-        MAX_SAFE_CHARS = 60000 if is_anthropic else 200000
+        # Unified limit: 18k chars (~4.5k tokens) to stay well under 30k TPM
+        # Leaves room for: system prompt (~1k), task context (~1k), response (~2k)
+        MAX_SAFE_CHARS = 18000
         
         # If we are effectively blowing up the context, reduce recent count dynamicallly
         if total_chars > MAX_SAFE_CHARS:
             print(f"[CONTEXT] Trace limits exceeded ({total_chars} chars > {MAX_SAFE_CHARS}). Reducing history window.")
-            recent_count = 5  # Reduce to last 5 steps to save space
+            recent_count = 3  # Reduce to last 3 steps to save space (was 5)
             
         # If history is long, summarize the ancient part
         if len(all_msgs) > recent_count:
@@ -487,9 +498,9 @@ class BaseAgent(ABC):
                     messages.append(HumanMessage(content=new_content))
                     continue
                 
-                # Also strip raw tool outputs if they are huge
-                if len(content_str) > 5000:
-                     new_content = content_str[:1000] + f"\n... [{len(content_str)-2000} chars truncated] ...\n" + content_str[-1000:]
+                # Also strip raw tool outputs if they are huge (reduced from 5000)
+                if len(content_str) > 2000:
+                     new_content = content_str[:500] + f"\n... [{len(content_str)-1000} chars truncated] ...\n" + content_str[-500:]
                      messages.append(HumanMessage(content=new_content))
                      continue
             
@@ -540,39 +551,174 @@ Respond with your action in JSON format.
 """
         messages.append(HumanMessage(content=context))
         
+        # CRITICAL: Smart context compression
+        # Instead of just truncating, synthesize the most important information
+        final_chars = sum(len(str(m.content)) for m in messages)
+        if final_chars > MAX_SAFE_CHARS:
+            print(f"[CONTEXT] Smart compression: {final_chars} chars -> target 3.5k-5k")
+            
+            # Extract key information from all messages for synthesis
+            synthesized = self._synthesize_context(messages, state)
+            
+            # Keep only system message + synthesized context + current prompt (last msg)
+            system_msgs = [m for m in messages if isinstance(m, SystemMessage)]
+            
+            # Build compressed message list
+            messages = system_msgs
+            
+            # Add synthesized context if we have useful info
+            if synthesized and len(synthesized) > 100:
+                # Target: 3.5k chars, max 5k only if essential
+                target_size = 3500
+                if len(synthesized) > 5000:
+                    synthesized = synthesized[:4500] + "\n...[compressed]"
+                    print(f"[CONTEXT] Synthesis capped at 5k chars (was {len(synthesized)})")
+                elif len(synthesized) > target_size:
+                    print(f"[CONTEXT] Synthesis at {len(synthesized)} chars (above 3.5k target)")
+                
+                messages.append(SystemMessage(content=f"=== CONTEXT SYNTHESIS ===\n{synthesized}\n==="))
+            
+            # Always include the current prompt (last message before truncation)
+            messages.append(HumanMessage(content=context))
+            
+            final_chars = sum(len(str(m.content)) for m in messages)
+            print(f"[CONTEXT] Final compressed size: {final_chars} chars")
+        
         return messages
     
+    def _synthesize_context(self, messages: list, state: AgentState) -> str:
+        """Synthesize the most important information from message history.
+        
+        Extracts:
+        - Key findings and data collected
+        - Visited URLs and their relevance
+        - Important errors to avoid
+        - Current progress toward goal
+        
+        Target: 2k-3.5k chars (max 5k if essential)
+        """
+        import json
+        
+        synthesis_parts = []
+        visited_sites = []
+        key_findings = []
+        errors_seen = []
+        actions_taken = []
+        
+        for msg in messages:
+            content = str(msg.content) if hasattr(msg, 'content') else ""
+            
+            # Extract from AI messages (actions)
+            if isinstance(msg, AIMessage):
+                try:
+                    data = json.loads(content)
+                    action = data.get("action", "")
+                    args = data.get("args", {})
+                    
+                    if action == "goto":
+                        url = args.get("url", "")
+                        if url and "duckduckgo" not in url.lower():
+                            domain = url.split('/')[2] if '//' in url else url[:40]
+                            if domain not in visited_sites:
+                                visited_sites.append(domain)
+                    elif action == "extract_visible_text":
+                        actions_taken.append("extracted text")
+                    elif action == "done":
+                        summary = args.get("summary", "")
+                        if summary and "error" not in summary.lower():
+                            key_findings.append(summary[:200])
+                except:
+                    pass
+                    
+            # Extract from Human messages (results, errors)
+            elif isinstance(msg, HumanMessage):
+                # Look for extracted data markers
+                if "research_source" in content.lower() or "collected" in content.lower():
+                    # Extract just the key data, not verbose content
+                    lines = content.split('\n')
+                    for line in lines[:5]:  # First 5 lines only
+                        if ':' in line and len(line) < 150:
+                            key_findings.append(line.strip()[:100])
+                            
+                if "Error:" in content or "failed" in content.lower():
+                    # Extract error summary
+                    error_line = content.split('\n')[0][:100]
+                    if error_line not in errors_seen:
+                        errors_seen.append(error_line)
+        
+        # Build synthesis - prioritize brevity
+        if visited_sites:
+            synthesis_parts.append(f"Sites visited: {', '.join(visited_sites[:8])}")
+        
+        # Check extracted_data in state (gold data)
+        extracted = state.get("extracted_data", {})
+        if extracted:
+            data_keys = list(extracted.keys())[:5]
+            if data_keys:
+                synthesis_parts.append(f"Data collected: {', '.join(data_keys)}")
+                # Add brief summary of each (max 100 chars each)
+                for key in data_keys[:3]:
+                    val = str(extracted[key])[:150]
+                    synthesis_parts.append(f"  • {key}: {val}...")
+        
+        if key_findings:
+            synthesis_parts.append("Key findings:")
+            for finding in key_findings[:5]:
+                synthesis_parts.append(f"  • {finding}")
+        
+        if errors_seen:
+            synthesis_parts.append(f"Errors to avoid: {len(errors_seen)} issues seen")
+        
+        # Calculate size and adjust
+        result = "\n".join(synthesis_parts)
+        
+        # If we're under 2k, we can add more detail
+        if len(result) < 2000 and extracted:
+            # Add more extracted data detail
+            for key in list(extracted.keys())[3:6]:
+                if len(result) < 3000:
+                    val = str(extracted[key])[:200]
+                    result += f"\n  • {key}: {val}"
+        
+        return result
+    
     def _summarize_history(self, messages: list[BaseMessage]) -> str:
-        """Condense a list of messages into a structural summary."""
+        """Condense messages into ultra-compressed summary (max 10 lines)."""
         import json
         summary_lines = []
-        step_num = 1
         
         for msg in messages:
             if isinstance(msg, AIMessage):
                 try:
-                    # Parse action
                     if hasattr(msg, 'content') and msg.content:
                         data = json.loads(str(msg.content))
-                        action = data.get("action", "unknown")
+                        action = data.get("action", "?")
                         args = data.get("args", {})
-                        
-                        # Format concise summary
-                        args_str = ", ".join(f"{k}={str(v)[:50]}" for k, v in args.items())
-                        summary_lines.append(f"Action: {action}({args_str})")
+                        # Ultra-concise: only key info
+                        if action == "click":
+                            summary_lines.append(f"→ click: {args.get('selector', '')[:30]}")
+                        elif action == "goto":
+                            url = args.get('url', '')
+                            domain = url.split('/')[2] if '/' in url else url[:30]
+                            summary_lines.append(f"→ goto: {domain}")
+                        elif action == "extract_visible_text":
+                            summary_lines.append("→ extracted page")
+                        elif action == "done":
+                            summary_lines.append("→ DONE")
+                        else:
+                            summary_lines.append(f"→ {action}")
                 except:
-                    summary_lines.append(f"Action: {str(msg.content)[:100]}...")
+                    pass  # Skip unparseable
                     
             elif isinstance(msg, HumanMessage):
-                content = str(msg.content)
-                if "Visible content" in content:
-                    summary_lines.append("Result: Page content extracted")
-                elif "Screenshot captured" in content:
-                     summary_lines.append("Result: Screenshot captured")
-                else:
-                    summary_lines.append(f"Result: {content[:100]}...")
+                content = str(msg.content)[:60]
+                if "Visible content" in content or "Page content" in content:
+                    continue  # Skip verbose page content messages
+                if "Result:" in content or "Error:" in content:
+                    summary_lines.append(content[:40])
         
-        return "\n".join(summary_lines)
+        # Cap at 10 lines to prevent bloat
+        return "\n".join(summary_lines[:10])
     
     def _update_state(
         self,

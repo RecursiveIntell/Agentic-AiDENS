@@ -236,7 +236,9 @@ Your task: {state['goal']}
         
 
         # Vision mode: capture screenshot for LLM
+        # Now cost-effective with detail=low (~500 tokens vs ~5k with high)
         screenshot_b64 = None
+        
         if self.config.vision_mode and self._browser_tools:
             screenshot_b64 = self.capture_screenshot_base64(self._browser_tools)
             if screenshot_b64:
@@ -335,7 +337,7 @@ Use the screenshot to:
                 )
             
             # Execute the browser action
-            result = self._execute_action(action_data)
+            result = self._execute_action(action_data, state)
             
             # Track visited URL
             visited = None
@@ -460,7 +462,7 @@ Use the screenshot to:
             # On parse failure, extract instead of quitting
             return {"action": "extract_visible_text", "args": {"max_chars": 5000}}
     
-    def _execute_action(self, action_data: dict) -> ToolResult:
+    def _execute_action(self, action_data: dict, state: dict = None) -> ToolResult:
         """Execute a browser action with auto-fix for common selector issues."""
         action = action_data.get("action", "")
         args = action_data.get("args", {}).copy()  # Copy to avoid mutating original
@@ -493,6 +495,36 @@ Use the screenshot to:
             if is_anthropic and current_max > 4500:
                 print(f"[BROWSER] Optimizing for Anthropic TPM: Reducing extract size {current_max} -> 4500")
                 args["max_chars"] = 4500
+            
+            # CHECK SHARED STATE: Skip auto_scroll if research already scrolled this page
+            if state and "auto_scroll" not in args:
+                try:
+                    page_state = self._browser_tools.get_page_state()
+                    current_url = page_state.get('current_url', '') or page_state.get('url', '')
+                    scrolled_urls = state.get('scrolled_urls', [])
+                    url_base = current_url.split('?')[0].rstrip('/')
+                    already_scrolled = any(u.split('?')[0].rstrip('/') == url_base for u in scrolled_urls)
+                    
+                    if already_scrolled:
+                        args["auto_scroll"] = False
+                        print(f"[BROWSER] Skipping scroll (research already scrolled this page)")
+                except Exception:
+                    pass  # Fall through if can't check
+        
+        # SKIP SCROLL if research already scrolled this page
+        if action == "scroll" and state:
+            try:
+                page_state = self._browser_tools.get_page_state()
+                current_url = page_state.get('current_url', '') or page_state.get('url', '')
+                scrolled_urls = state.get('scrolled_urls', [])
+                url_base = current_url.split('?')[0].rstrip('/')
+                already_scrolled = any(u.split('?')[0].rstrip('/') == url_base for u in scrolled_urls)
+                
+                if already_scrolled:
+                    print(f"[BROWSER] Skipping scroll action (research already scrolled this page)")
+                    return ToolResult(success=True, message="Scroll skipped - page already scrolled by research")
+            except Exception:
+                pass
         
         return self._browser_tools.execute(action, args)
 

@@ -1,0 +1,60 @@
+{
+  "implementation_plan": {
+    "goal_analysis": "The user wants a comprehensive report on the 'crav'n' brand, including detailed information about the company that owns or manufactures it, and a complete list of all other products they make. The report should be thorough, not just a summary.",
+    "steps": [
+      {
+        "step": 1,
+        "agent": "research",
+        "action": "Search for the official website and background information on the 'crav'n' brand.",
+        "success_criteria": "Official website and credible background sources identified."
+      },
+      {
+        "step": 2,
+        "agent": "research",
+        "action": "Identify the parent company or manufacturer of the 'crav'n' brand using official sources, press releases, and business directories.",
+        "success_criteria": "Parent company or manufacturer confirmed with at least two independent sources."
+      },
+      {
+        "step": 3,
+        "agent": "research",
+        "action": "Search for a comprehensive list of all products under the 'crav'n' brand from the official website, retailer listings, and product catalogs.",
+        "success_criteria": "List of all 'crav'n' products compiled from at least three sources."
+      },
+      {
+        "step": 4,
+        "agent": "research",
+        "action": "Investigate the parent company's other brands and product lines using company websites, annual reports, and industry databases.",
+        "success_criteria": "List of all other brands and products made by the parent company, verified by at least two sources."
+      },
+      {
+        "step": 5,
+        "agent": "research",
+        "action": "Collect additional details such as company history, market presence, and distribution channels from business news, trade publications, and official reports.",
+        "success_criteria": "Supplementary company information gathered from at least two reputable sources."
+      },
+      {
+        "step": 6,
+        "agent": "research",
+        "action": "Verify all collected information for accuracy and consistency across sources.",
+        "success_criteria": "No major discrepancies found; all facts corroborated by multiple sources."
+      },
+      {
+        "step": 7,
+        "agent": "data",
+        "action": "Organize all findings into a structured, detailed report with sections for brand overview, company background, product lists, and references.",
+        "success_criteria": "Full report generated with clear sections and source citations."
+      }
+    ],
+    "estimated_agents": [
+      "research",
+      "data"
+    ],
+    "constraints": {
+      "max_sources": 10,
+      "time_sensitive": false
+    }
+  },
+  "research_source_1": "Home Recipes About Us Product Meal Time Any Time Snack Time All Products Where To Buy Home Recipes About Us Product Meal Time Any Time Snack Time All Products Where To Buy Follow Us! Home > Products Search Breaded Cheese Curds White Cheddar Cheese Curds In A Crispy Breading 8.00 oz 036800467033 Breaded Cheese Curds White Cheddar Cheese Curds In A Crispy Breading 8.00 oz 036800467033 Breakfast Egg Bites Three Cheese 5.40 CT 036800476554 Candy Cane With Peppermint Creme Double Stuffed Chocolate Sandwich Cookies 15.25 oz 036800475922 Caramel Coconut Fudge Striped Cookies 8.50 oz 036800476271 Cheddar Cheese Crackers 12.00 ct 036800476035 Cheddar Cheese Crackers 21.00 oz 036800474222 Cheddar Penguins Baked Snack Crackers 6.60 oz 036800476196 Cheddar Ridged Cheese Crackers 9.00 oz 036800476042 Cheese Naturally Flavored Cheese Pizza Wrapped In A Crispy Browned Crust 20.00 oz 036800467521 Cheese Original Thin Crust Pizza 14.50 oz 036800460102 Chocolate Chip Break 'N Bake Cookie Dough 16.00 oz 036800477599 Chocolate Chip Cookie Dough 16.50 oz 036800477605 Chocolate Chip Edible Cookie Dough 15.00 oz 036800477162 Chocolate Creme Double Stuffed Chocolate Sandwich Cookies 20.00 oz 036800475823 Cinnamon Graham Crackers 14.40 oz 036800473959 1 2 3 4 \u2026 47 48 49 \u2192 Follow Us All rights reserved. \u00a92025 Topco Associates, LLC. Terms of Use Privacy Policy Contact Us",
+  "research_source_2": "Skip to Main Content Toggle main menu visibility *Item selection varies by store Savory or Sweet? Always flavorful, delicious and hitting my new craving! Crav\u2019n Flavor is on a mission to satisfy with our irresistible comfort foods and snacks by going beyond the basics with a variety of boldly flavored dishes. With all of our mouthwatering eats reasonably priced and ready-made, Crav\u2019n Flavor makes enjoying your favorite foods simple so that you can go ahead and give into your cravings! Try these delicious recipes! New inspiration each month! Terms & Conditions Privacy Policy Topco Associates LLC All Rights Reserved \u00a92022 | Site designed and maintained by Biz Webmasters Original text Rate this translation Your feedback will be used to help improve Google Translate",
+  "data_result": "An error occurred with the model"
+}

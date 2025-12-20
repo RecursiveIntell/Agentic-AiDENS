@@ -120,7 +120,7 @@ class BrowserTools:
         if not url.startswith(("http://", "https://", "file://")):
             url = "https://" + url
         
-        self.page.goto(url, wait_until="domcontentloaded")
+        self.page.goto(url, wait_until="domcontentloaded", timeout=30000)  # 30s timeout to prevent hangs
         
         return ToolResult(
             success=True,
@@ -145,27 +145,26 @@ class BrowserTools:
         original_selector = selector
         selector = format_selector(selector)
         
-        # Build list of selectors to try
+        # Build list of selectors to try (limited to 4 max to reduce hang time)
         selectors_to_try = [selector]
         
-        # If it's a text= selector, add partial match fallbacks
+        # If it's a text= selector, add ONE partial match fallback only
         if selector.startswith('text="') and selector.endswith('"'):
             full_text = selector[6:-1]  # Extract text between quotes
             
-            # Try shorter versions of the text (first 50, 30, 20 chars)
-            if len(full_text) > 50:
-                selectors_to_try.append(f'text="{full_text[:50]}"')
-            if len(full_text) > 30:
-                selectors_to_try.append(f'text="{full_text[:30]}"')
+            # Skip selectors with problematic special characters (›, →, etc.)
+            if any(c in full_text for c in ['›', '→', '←', '»', '«', '\u2019']):
+                # Clean the text by removing these chars
+                clean_text = full_text.replace('›', ' ').replace('→', ' ').replace('←', ' ').split()[0]
+                if len(clean_text) > 3:
+                    selectors_to_try.insert(0, f'text="{clean_text}"')
+            
+            # Try shorter version (first word or 20 chars) - just ONE fallback
             if len(full_text) > 20:
                 selectors_to_try.append(f'text="{full_text[:20]}"')
             
-            # Also try as a link with partial text
-            selectors_to_try.append(f'a:has-text("{full_text[:40]}")')
+            # Also try as a link with partial text - limit to 1 attempt
             selectors_to_try.append(f'a:has-text("{full_text[:25]}")')
-            
-            # Try h1, h2, h3 with text (common for article titles)
-            selectors_to_try.append(f':is(h1,h2,h3):has-text("{full_text[:30]}")')
         
         last_error = None
         for try_selector in selectors_to_try:
@@ -173,9 +172,9 @@ class BrowserTools:
                 # Check if element exists first
                 locator = self.page.locator(try_selector)
                 if locator.count() > 0:
-                    # Strategy 1: Standard click
+                    # Strategy 1: Standard click (reduced from 3000ms to 1500ms)
                     try:
-                        locator.first.click(timeout=3000)
+                        locator.first.click(timeout=1500)
                         self._wait_after_click()
                         return ToolResult(
                             success=True,
@@ -183,11 +182,10 @@ class BrowserTools:
                             data={"url": self.page.url, "selector_used": try_selector},
                         )
                     except Exception as e:
-                        # Strategy 2: Force click (bypasses visibility/overlay checks)
-                        # Only try if the error suggests it might help (Timeout, or "not clickable")
+                        # Strategy 2: Force click (reduced timeout)
                         print(f"Standard click failed: {e}. Retrying with force=True")
                         try:
-                            locator.first.click(timeout=3000, force=True)
+                            locator.first.click(timeout=1500, force=True)
                             self._wait_after_click()
                             return ToolResult(
                                 success=True,
@@ -195,10 +193,11 @@ class BrowserTools:
                                 data={"url": self.page.url, "selector_used": try_selector, "method": "force"},
                             )
                         except Exception as e2:
-                            # Strategy 3: JavaScript click (The Nuclear Option)
-                            print(f"Force click failed: {e2}. Retrying with JS evaluation")
+                            # Strategy 3: JavaScript click with timeout (was 30s default!)
+                            print(f"Force click failed: {e2}. Trying JS click (5s timeout)")
                             try:
-                                locator.first.evaluate("element => element.click()")
+                                # Add explicit timeout to prevent 30s hangs
+                                locator.first.evaluate("element => element.click()", timeout=5000)
                                 self._wait_after_click()
                                 return ToolResult(
                                     success=True,
@@ -453,27 +452,21 @@ class BrowserTools:
                 # Auto-scroll if requested to trigger lazy loading
                 if auto_scroll:
                     try:
-                        # Gentle scroll to bottom with timing for slower connections
-                        # Gives time for lazy loading and screenshots
+                        # Fast scroll to trigger lazy loading (no slow scroll-back)
                         self.page.evaluate("""
                             async () => {
                                 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-                                // Limit max scroll to prevent infinite loops or huge delays
-                                const maxScroll = 15000;
+                                const maxScroll = 8000;  // Reduced from 15000
                                 const height = Math.min(document.body.scrollHeight, maxScroll);
                                 
-                                // Scroll down in viewport-sized chunks with timing for slow connections
-                                // 150ms between scrolls allows for lazy loading and screenshots
-                                for (let i = 0; i < height; i += 600) {
+                                // Fast scroll in large chunks (faster than before)
+                                for (let i = 0; i < height; i += 1000) {
                                     window.scrollTo(0, i);
-                                    await delay(150);  // Increased from 50ms for slower connections
+                                    await delay(50);  // Reduced from 150ms
                                 }
                                 window.scrollTo(0, document.body.scrollHeight);
-                                await delay(400);  // Increased from 200ms - wait for final content load
-                                
-                                // Scroll back up to top for consistent state
-                                window.scrollTo(0, 0);
-                                await delay(200);  // Increased from 100ms
+                                await delay(200);  // Reduced from 400ms
+                                // No scroll-back-up - stay at bottom
                             }
                         """)
                     except Exception as e:

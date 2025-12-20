@@ -69,10 +69,11 @@ OUTPUT FORMAT (JSON only):
 }
 
 RULES:
-- CHECK HISTORY FIRST: 
-  1. Use 'search_strategies' to find high-level methods.
-  2. Use 'search_runs' to find specific examples.
-  3. If you find a successful strategy, COPY IT!
+- CHECK MEMORY FIRST: 
+  1. I will auto-inject PROVEN STRATEGIES from your encrypted bank.
+  2. I will auto-inject MISTAKES TO AVOID from your Apocalypse bank.
+  3. I will also show RAW INSIGHTS from recent runs for new ideas.
+  4. PRIORITIZE encrypted banks (they're battle-tested), but consider raw insights for innovation!
 - Create a HIGHLY GRANULAR plan (aim for 20-30 steps for complex tasks)
 - Break actions down: "Research X" -> "Search for X", "Click Result 1", "Verify Content", "Search Result 2", "Synthesize"
 - Apply SYSTEMS THINKING: consider dependencies, edge cases, and verification
@@ -114,22 +115,6 @@ Output as JSON:
         
         messages = self._build_messages(state, context)
         
-        # Add tool definitions for recall
-        from ..tool_schemas import ToolDefinition
-        tools = [
-            ToolDefinition(
-                name="search_runs",
-                description="Search successful past runs to learn from them",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "description": "Search query"}
-                    },
-                    "required": ["query"]
-                }
-            ).to_dict()
-        ]
-        
         try:
             # We first try to see if the model WANTS to use a tool to look up history
             # But the planner's main job is generating JSON.
@@ -139,23 +124,20 @@ Output as JSON:
             # Actually, `safe_invoke` doesn't support tools natively for PlannerAgent (returns AIMessage).
             # We'll just run a background search for relevant history automatically and inject it into context.
             
-            # AUTOMATIC RECALL INJECTION
+            # TIERED RECALL INJECTION (Strategies > Apocalypse > Raw Runs)
             history_context = ""
-            if hasattr(self, 'recall_tool'):
-                # 1. Search Strategies (Abstraction)
-                strat_res = self.recall_tool.execute("search_strategies", {"query": goal, "limit": 3})
-                if strat_res.success and strat_res.data:
-                    history_context += f"\n\n🏆 PROVEN STRATEGIES FOUND:\n{strat_res.message}\n\n"
-
-                # 2. Search Specific Runs (Details)
-                run_res = self.recall_tool.execute("search_runs", {"query": goal, "limit": 3})
-                if run_res.success and run_res.data:
-                    history_context += f"\n\n📜 RELEVANT PAST RUNS:\n{run_res.message}\n\n"
+            try:
+                from ..knowledge_base import get_knowledge_base
+                kb = get_knowledge_base()
+                recall_result = kb.tiered_recall("planner", goal)
+                history_context = recall_result.to_prompt_injection()
                 
                 if history_context:
-                    history_context += "IMPORTANT: Prioritize using the proven strategies above in your plan!"
-                    context += history_context
+                    context += f"\n\n{history_context}"
                     messages = self._build_messages(state, context)  # Rebuild with history
+                    print("[PLANNER] 🧠 Injected tiered recall context")
+            except Exception as e:
+                print(f"[PLANNER] ⚠️ Tiered recall failed: {e}")
             
             response = self.safe_invoke(messages)
             

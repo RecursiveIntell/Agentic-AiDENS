@@ -173,7 +173,10 @@ class MultiAgentRunner:
         )
         
         # Build graph
-        checkpointer = MemorySaver() if enable_checkpointing else None
+        # CRITICAL: MemorySaver causes hangs - checkpoints after every super-step
+        # causing exponential memory growth. Disable by default.
+        # See: https://langchain.com/ docs on checkpoint overhead
+        checkpointer = None  # Disabled - was causing step 13+ hangs
         self.graph = build_agent_graph(checkpointer)
     
     def set_browser_manager(self, browser_manager) -> None:
@@ -327,6 +330,12 @@ class MultiAgentRunner:
                      self.session_store.update_session(self.session_id, {"error": str(e), "task_complete": True})
                  except:
                      pass
+            
+            # APOCALYPSE RECORDING: Learn from this failure
+            try:
+                self._record_failure(goal, str(e))
+            except Exception as rec_err:
+                print(f"⚠️ Apocalypse recording failed: {rec_err}")
 
             # Handle empty response errors from Anthropic/OpenAI
             if "empty" in error_msg or "must contain" in error_msg:
@@ -364,4 +373,65 @@ class MultiAgentRunner:
             import json
             return f"Collected data: {json.dumps(state['extracted_data'], indent=2)}"
         
-        return "Task completed but no specific answer was generated."
+        # Fall through to check for results in messages
+        messages = state.get("messages", [])
+        if messages:
+            return str(messages[-1].content) if hasattr(messages[-1], 'content') else str(messages[-1])
+        return "No result"
+    
+    def _record_failure(self, goal: str, error: str) -> None:
+        """Record a failure to the Apocalypse Bank for learning.
+        
+        Uses LLM to extract a generalizable error pattern.
+        """
+        from .agents.base import create_llm_client
+        from .knowledge_base import get_knowledge_base
+        
+        # Get config from registry
+        tools = self._registry.get(self.session_id)
+        if not tools:
+            return
+            
+        try:
+            llm = create_llm_client(tools.config)
+            
+            from langchain_core.messages import SystemMessage, HumanMessage
+            
+            prompt = f"""
+            Analyze this failure and extract a GENERALIZABLE lesson.
+            
+            GOAL: {goal}
+            ERROR: {error}
+            
+            Produce a JSON object:
+            {{
+                "error_pattern": "Short error type (3-5 words)",
+                "description": "How to avoid this mistake next time (1-2 sentences)"
+            }}
+            """
+            
+            resp = llm.invoke([
+                SystemMessage(content="You extract failure patterns to help agents learn."),
+                HumanMessage(content=prompt)
+            ])
+            
+            # Parse JSON
+            content = resp.content.strip()
+            if "```" in content:
+                content = content.split("```")[1].replace("json", "").strip()
+            
+            import json
+            data = json.loads(content)
+            error_pattern = data.get("error_pattern", "Unknown Error")
+            description = data.get("description", "No description")
+            
+            # Determine which agent failed based on error or state
+            # For now, record to both since we can't easily determine
+            kb = get_knowledge_base()
+            kb.save_apocalypse("planner", error_pattern, description)
+            kb.save_apocalypse("research", error_pattern, description)
+            
+            print(f"💀 Apocalypse Recorded: {error_pattern}")
+            
+        except Exception as e:
+            print(f"⚠️ LLM Apocalypse extraction failed: {e}")

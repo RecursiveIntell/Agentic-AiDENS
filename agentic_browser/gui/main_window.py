@@ -191,6 +191,10 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._connect_signals()
         self._update_status_bar()
+        
+        # Pre-warm the embedding model in background thread
+        # This eliminates startup delay when user clicks Run
+        self._prewarm_embedding_model()
     
     def _setup_ui(self):
         """Set up the main window UI."""
@@ -924,6 +928,32 @@ class MainWindow(QMainWindow):
             return f"{count/1000:.3f}k"
         else:
             return f"{count/1_000_000:.3f}M"
+    
+    def _prewarm_embedding_model(self) -> None:
+        """Pre-warm the embedding model in a background thread.
+        
+        This loads the sentence-transformers model at GUI startup so
+        there's no delay when the user clicks Run. Does not interfere
+        with GUI responsiveness.
+        """
+        import threading
+        
+        def _load_model():
+            try:
+                from sentence_transformers import SentenceTransformer
+                # Load model (this is the slow part)
+                model = SentenceTransformer('all-MiniLM-L6-v2')
+                # Cache it in the knowledge base
+                from agentic_browser.graph.knowledge_base import get_knowledge_base
+                kb = get_knowledge_base()
+                kb._embedding_model = model
+                print("[GUI] ✅ Embedding model pre-warmed")
+            except Exception as e:
+                print(f"[GUI] ⚠️ Pre-warm failed (non-critical): {e}")
+        
+        # Start in background thread (daemon=True so it doesn't block exit)
+        thread = threading.Thread(target=_load_model, daemon=True)
+        thread.start()
 
 def run_gui():
     """Run the GUI application."""

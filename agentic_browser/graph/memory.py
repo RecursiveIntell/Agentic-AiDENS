@@ -14,6 +14,38 @@ from datetime import datetime
 from ..config import get_base_dir
 
 
+class StateEncoder(json.JSONEncoder):
+    """Custom JSON encoder for agent state.
+    
+    Handles langchain message objects and other non-serializable types.
+    """
+    
+    def default(self, obj):
+        # Handle langchain messages
+        if hasattr(obj, 'content') and hasattr(obj, 'type'):
+            # AIMessage, HumanMessage, SystemMessage, etc.
+            return {
+                '_type': obj.__class__.__name__,
+                'content': obj.content,
+                'additional_kwargs': getattr(obj, 'additional_kwargs', {})
+            }
+        # Handle any object with a to_dict method
+        if hasattr(obj, 'to_dict'):
+            return obj.to_dict()
+        # Handle any object with __dict__
+        if hasattr(obj, '__dict__'):
+            return {
+                '_type': obj.__class__.__name__,
+                **{k: v for k, v in obj.__dict__.items() if not k.startswith('_')}
+            }
+        return super().default(obj)
+
+
+def safe_json_dumps(obj) -> str:
+    """Safely serialize state to JSON, handling langchain objects."""
+    return json.dumps(obj, cls=StateEncoder, default=str)
+
+
 class SessionStore:
     """SQLite-based session storage for agent state.
     
@@ -277,7 +309,7 @@ class SessionStore:
         conn.execute("""
             INSERT INTO sessions (id, goal, created_at, updated_at, state_json, embedding)
             VALUES (?, ?, ?, ?, ?, ?)
-        """, (session_id, goal, now, now, json.dumps(state), embedding_blob))
+        """, (session_id, goal, now, now, safe_json_dumps(state), embedding_blob))
         conn.commit()
     
     def update_session(self, session_id: str, state: dict) -> None:
@@ -308,20 +340,20 @@ class SessionStore:
                     UPDATE sessions 
                     SET state_json = ?, updated_at = ?, completed = ?, final_answer = ?, error = ?, status = ?, embedding = ?
                     WHERE id = ?
-                """, (json.dumps(state), now, completed, final_answer, error, status, embedding_blob, session_id))
+                """, (safe_json_dumps(state), now, completed, final_answer, error, status, embedding_blob, session_id))
             else:
                 # Fallback standard update
                  conn.execute("""
                     UPDATE sessions 
                     SET state_json = ?, updated_at = ?, completed = ?, final_answer = ?, error = ?, status = ?
                     WHERE id = ?
-                """, (json.dumps(state), now, completed, final_answer, error, status, session_id))
+                """, (safe_json_dumps(state), now, completed, final_answer, error, status, session_id))
         else:
             conn.execute("""
                 UPDATE sessions 
                 SET state_json = ?, updated_at = ?, completed = ?, final_answer = ?, error = ?, status = ?
                 WHERE id = ?
-            """, (json.dumps(state), now, completed, final_answer, error, status, session_id))
+            """, (safe_json_dumps(state), now, completed, final_answer, error, status, session_id))
             
         conn.commit()
 

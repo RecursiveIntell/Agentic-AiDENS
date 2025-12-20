@@ -58,6 +58,9 @@ class AgentState(TypedDict):
     # Track if last action was scroll - forces extract on next step to update context
     last_action_was_scroll: bool
     
+    # Track URLs that have been scrolled (shared between agents to avoid redundant scrolling)
+    scrolled_urls: Annotated[list[str], operator.add]
+    
     # Retrospective Agent Tracking
     retrospective_ran: bool
     
@@ -110,6 +113,7 @@ def create_initial_state(
         session_id=session_id,
         clicked_selectors=[],
         last_action_was_scroll=False,
+        scrolled_urls=[],
         implementation_plan=None,
         plan_step_index=0,
         retrospective_ran=False,

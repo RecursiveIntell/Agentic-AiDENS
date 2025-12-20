@@ -135,9 +135,10 @@ class LazyBrowserManager:
         # Start Playwright
         self._playwright = sync_playwright().start()
         
-        # Launch browser
+        # Launch browser with cleaner UI for automation
         self._browser = self._playwright.chromium.launch(
             headless=self.config.headless,
+            args=["--disable-infobars"],  # Suppress status bar during automation
         )
         
         # Create context with standard viewport

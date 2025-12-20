@@ -7,6 +7,10 @@ Provides automatic tracing of all LangGraph operations when enabled.
 import os
 from typing import Optional
 
+# CRITICAL: Disable tracing by default to prevent memory leaks
+# LangChain tracing can cause memory leaks during multi-agent execution
+os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
+
 
 def configure_tracing(
     api_key: Optional[str] = None,
