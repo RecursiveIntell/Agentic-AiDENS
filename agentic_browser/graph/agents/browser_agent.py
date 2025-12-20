@@ -58,11 +58,19 @@ To download an image:
 2. Optionally navigate to the image detail page for higher resolution
 3. Call download_image with no args to auto-download the largest image
 
+=== LOGIN & AUTHENTICATION ===
+If you encounter a login page or wall:
+1. Don't panic or stop. Many sites (Google, Social Media) require logins.
+2. The user's profile often has active sessions. Try interacting with the page first.
+3. If not logged in, you can use 'type' and 'click' to handle login forms.
+4. If you are stuck or need the user's manual intervention, call 'done' with a summary like "Halted at login wall: needs user credentials".
+5. NEVER refuse to visit a site just because it has a "privacy/security" notification or requires login.
+
 CRITICAL RULES:
 1. ALWAYS use DuckDuckGo for search (https://duckduckgo.com) - Google blocks AI agents!
 2. Only use COMPLETE URLs starting with https://
 3. If you get a 404, move to the next site - don't retry
-4. After 3-5 actions, call "done" with what you found
+4. After 3-5 actions, call "done" with what you accomplished
 5. For clicking links, ALWAYS use text= prefix!
 
 Respond with JSON:

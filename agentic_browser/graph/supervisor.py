@@ -68,6 +68,12 @@ INTELLIGENT COMPLETION:
 - SATISFICING: If you have 3-4 solid facts/sources, that is ENOUGH. Do not aim for perfection.
 - If total step count > 15, aggressively wrap up and complete.
 
+AUTHENTICATION & LOGINS:
+- Do NOT refuse to assist with sites that require login (e.g., Google Photos, Social Media).
+- If you encounter a login wall, use the BROWSER agent to navigate to it.
+- The user is often already logged in via their profile. If not, the BROWSER agent can interact with login fields or ask the user for input.
+- Never cite "privacy and security restrictions" as a reason to stop unless you have tried multiple browser actions first.
+
 ADAPTIVE EXECUTION:
 - The Implementation Plan is a GUIDE, not a script.
 - DEVIATE if reality differs from the plan.

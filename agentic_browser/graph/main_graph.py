@@ -435,3 +435,58 @@ class MultiAgentRunner:
             
         except Exception as e:
             print(f"⚠️ LLM Apocalypse extraction failed: {e}")
+
+    def _extract_and_save_strategy(self, goal: str, final_answer: str) -> None:
+        """Extract a successful strategy from the current run and save it.
+        
+        Args:
+            goal: The original goal
+            final_answer: The final result
+        """
+        from .agents.base import create_llm_client
+        from .knowledge_base import get_knowledge_base
+        
+        tools = self._registry.get(self.session_id)
+        if not tools:
+            return
+            
+        try:
+            llm = create_llm_client(tools.config)
+            from langchain_core.messages import SystemMessage, HumanMessage
+            
+            prompt = f"""
+            Analyze this successful task and CRYSTALLIZE the winning strategy.
+            
+            GOAL: {goal}
+            RESULT: {final_answer}
+            
+            Produce a JSON object:
+            {{
+                "strategy_name": "Short name for this approach (3-5 words)",
+                "description": "High-level steps to solve similar problems again (1-3 sentences)"
+            }}
+            """
+            
+            resp = llm.invoke([
+                SystemMessage(content="You crystallize winning strategies for browser agents."),
+                HumanMessage(content=prompt)
+            ])
+            
+            content = resp.content.strip()
+            if "```" in content:
+                content = content.split("```")[1].replace("json", "").strip()
+            
+            import json
+            data = json.loads(content)
+            name = data.get("strategy_name", "General Approach")
+            desc = data.get("description", "Follow the standard procedure.")
+            
+            kb = get_knowledge_base()
+            # Save for both planner and research agents for maximum recall
+            kb.save_strategy("planner", name, desc)
+            kb.save_strategy("research", name, desc)
+            
+            print(f"💎 Strategy Crystallized: {name}")
+            
+        except Exception as e:
+            print(f"⚠️ Strategy crystallization failed: {e}")

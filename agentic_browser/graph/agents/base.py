@@ -546,13 +546,16 @@ Step: {state['step_count']} / {state['max_steps']}
 Previous Domain: {state['current_domain']}
 {plan_context}
 {task_context}
-
-Respond with your action in JSON format.
 """
+        # GUARD: If current context itself is huge, truncate it
+        MAX_CONTEXT_LEN = 15000
+        if len(context) > MAX_CONTEXT_LEN:
+            context = context[:MAX_CONTEXT_LEN] + "\n...[Current context truncated]"
+            print(f"[CONTEXT] Current prompt truncated from {len(context)} to {MAX_CONTEXT_LEN}")
+            
         messages.append(HumanMessage(content=context))
         
         # CRITICAL: Smart context compression
-        # Instead of just truncating, synthesize the most important information
         final_chars = sum(len(str(m.content)) for m in messages)
         if final_chars > MAX_SAFE_CHARS:
             print(f"[CONTEXT] Smart compression: {final_chars} chars -> target 3.5k-5k")
@@ -562,23 +565,12 @@ Respond with your action in JSON format.
             
             # Keep only system message + synthesized context + current prompt (last msg)
             system_msgs = [m for m in messages if isinstance(m, SystemMessage)]
-            
-            # Build compressed message list
             messages = system_msgs
             
-            # Add synthesized context if we have useful info
             if synthesized and len(synthesized) > 100:
-                # Target: 3.5k chars, max 5k only if essential
-                target_size = 3500
-                if len(synthesized) > 5000:
-                    synthesized = synthesized[:4500] + "\n...[compressed]"
-                    print(f"[CONTEXT] Synthesis capped at 5k chars (was {len(synthesized)})")
-                elif len(synthesized) > target_size:
-                    print(f"[CONTEXT] Synthesis at {len(synthesized)} chars (above 3.5k target)")
-                
                 messages.append(SystemMessage(content=f"=== CONTEXT SYNTHESIS ===\n{synthesized}\n==="))
             
-            # Always include the current prompt (last message before truncation)
+            # Re-add the (possibly truncated) current prompt
             messages.append(HumanMessage(content=context))
             
             final_chars = sum(len(str(m.content)) for m in messages)
@@ -672,14 +664,11 @@ Respond with your action in JSON format.
         # Calculate size and adjust
         result = "\n".join(synthesis_parts)
         
-        # If we're under 2k, we can add more detail
-        if len(result) < 2000 and extracted:
-            # Add more extracted data detail
-            for key in list(extracted.keys())[3:6]:
-                if len(result) < 3000:
-                    val = str(extracted[key])[:200]
-                    result += f"\n  • {key}: {val}"
-        
+        # Strictly limit to 3.5k-5k chars as per requirements
+        MAX_SYNTHESIS = 4500
+        if len(result) > MAX_SYNTHESIS:
+            result = result[:MAX_SYNTHESIS] + "\n[Synthesis truncated for brevity]"
+            
         return result
     
     def _summarize_history(self, messages: list[BaseMessage]) -> str:
