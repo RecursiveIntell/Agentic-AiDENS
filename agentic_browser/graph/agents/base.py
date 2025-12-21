@@ -7,6 +7,7 @@ Provides common functionality for all agent types.
 import logging
 from abc import ABC, abstractmethod
 from typing import Any
+import asyncio
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
 from langchain_openai import ChatOpenAI
@@ -161,6 +162,23 @@ class BaseAgent(ABC):
         
         # Use factory function to create provider-appropriate LLM client
         self.llm = create_llm_client(config, max_tokens=1000)
+
+    async def _invoke_llm_async(self, messages: list) -> Any:
+        """Invoke LLM asynchronously using ainvoke (Phase 7)."""
+        try:
+            # All LangChain LLMs support ainvoke
+            return await self.llm.ainvoke(messages)
+        except Exception as e:
+            print(f"[AGENT] Async LLM invocation failed: {e}")
+            return self.llm.invoke(messages)
+    
+    def invoke_llm_with_timeout(self, messages: list, timeout_s: float = 60.0) -> Any:
+        """Invoke LLM with timeout protection (Phase 7)."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return self.llm.invoke(messages)
+        return self.llm.invoke(messages)
     
     def update_token_usage(self, state: AgentState, response: AIMessage) -> dict:
         """Calculate and return updated token usage stats.
@@ -442,9 +460,55 @@ class BaseAgent(ABC):
         
         # CRITICAL: Hard cap on messages to prevent unbounded growth
         # operator.add accumulates forever without this
-        MAX_MESSAGES = 40
+        # VISION MODE: Use stricter limit since screenshots add ~500 tokens each
+        is_vision = self.config.vision_mode if hasattr(self.config, 'vision_mode') else False
+        MAX_MESSAGES = 20 if is_vision else 40
+        
         if len(all_msgs) > MAX_MESSAGES:
             all_msgs = all_msgs[-MAX_MESSAGES:]
+            
+        # Strip image_url content from older messages to reduce memory
+        # Only keep text from messages beyond the last 5
+        pruned_msgs = []
+        for i, msg in enumerate(all_msgs):
+            is_recent = i >= len(all_msgs) - 5
+            
+            if is_recent:
+                 # Keep recent messages fully intact
+                pruned_msgs.append(msg)
+            else:
+                # COMPACT OLDER MESSAGES (Phase 5 Optimization)
+                # 1. Convert complex/list content to simple string
+                # 2. Truncate to 500 chars
+                content = msg.content
+                if isinstance(content, list):
+                    # Multi-modal -> Text only
+                    text_parts = []
+                    for part in content:
+                        if isinstance(part, dict) and part.get('type') == 'text':
+                            text_parts.append(part.get('text', ''))
+                        elif isinstance(part, str):
+                            text_parts.append(part)
+                    content = " ".join(text_parts)
+                
+                # Truncate large text
+                content_str = str(content)
+                if len(content_str) > 500:
+                    content_str = content_str[:500] + "...[truncated]"
+                
+                # Reconstruct as simplified text-only message
+                if isinstance(msg, HumanMessage):
+                    pruned_msgs.append(HumanMessage(content=content_str))
+                elif isinstance(msg, AIMessage):
+                    pruned_msgs.append(AIMessage(content=content_str))
+                else:
+                    # System/Tool messages - keep as is but with truncated content if possible
+                    # Or just forcing a generic message type might be safer, but let's try to preserve type if it has content
+                    if hasattr(msg, 'content'):
+                        msg.content = content_str
+                    pruned_msgs.append(msg)
+        all_msgs = pruned_msgs
+
         
         recent_count = 10
         
@@ -457,14 +521,7 @@ class BaseAgent(ABC):
         # Determine total estimated size
         total_chars = sum(len(str(m.content)) for m in all_msgs)
         
-        # Unified limit: 18k chars (~4.5k tokens) to stay well under 30k TPM
-        # Leaves room for: system prompt (~1k), task context (~1k), response (~2k)
-        MAX_SAFE_CHARS = 18000
-        
-        # If we are effectively blowing up the context, reduce recent count dynamicallly
-        if total_chars > MAX_SAFE_CHARS:
-            print(f"[CONTEXT] Trace limits exceeded ({total_chars} chars > {MAX_SAFE_CHARS}). Reducing history window.")
-            recent_count = 3  # Reduce to last 3 steps to save space (was 5)
+        recent_count = 10
             
         # If history is long, summarize the ancient part
         if len(all_msgs) > recent_count:
@@ -521,23 +578,28 @@ class BaseAgent(ABC):
                 step_num = i + 1
                 status = step.get("status", "pending")
                 agent_name = step.get("agent", "unknown")
-                description = step.get("description", "")
+                description = step.get("description", "")[:200]  # Limit description length
                 
                 if i < plan_step_idx:
                     # Completed: Concise summary
-                    outcome = step.get("outcome", "Completed")
+                    outcome = step.get("outcome", "Completed")[:100]
                     plan_context += f"✔ Step {step_num} [{agent_name}]: {outcome}\n"
                 elif i == plan_step_idx:
                     # Current: Detailed view
                     plan_context += f"\n👉 CURRENT STEP {step_num} ({agent_name}):\n"
                     plan_context += f"   Task: {description}\n"
-                    plan_context += f"   Success Criteria: {step.get('success_criteria', 'Task completed')}\n"
-                    plan_context += f"   Notes: {step.get('notes', '')}\n\n"
+                    plan_context += f"   Success Criteria: {step.get('success_criteria', 'Task completed')[:150]}\n"
+                    plan_context += f"   Notes: {step.get('notes', '')[:150]}\n\n"
                 else:
                     # Future: List view
                     plan_context += f"○ Step {step_num} [{agent_name}]: {description}\n"
             
             plan_context += "===========================\n"
+            
+            # CRITICAL: Guard against plan_context explosion
+            MAX_PLAN_CONTEXT = 3000
+            if len(plan_context) > MAX_PLAN_CONTEXT:
+                plan_context = plan_context[:MAX_PLAN_CONTEXT] + "\n...[Plan truncated]\n==="
         
         # Add current task context
         context = f"""
@@ -548,33 +610,13 @@ Previous Domain: {state['current_domain']}
 {task_context}
 """
         # GUARD: If current context itself is huge, truncate it
-        MAX_CONTEXT_LEN = 15000
+        # This is a safety net - the task_context guards should prevent this
+        MAX_CONTEXT_LEN = 12000
         if len(context) > MAX_CONTEXT_LEN:
             context = context[:MAX_CONTEXT_LEN] + "\n...[Current context truncated]"
-            print(f"[CONTEXT] Current prompt truncated from {len(context)} to {MAX_CONTEXT_LEN}")
+            print(f"[CONTEXT] Current prompt truncated to {MAX_CONTEXT_LEN} chars")
             
         messages.append(HumanMessage(content=context))
-        
-        # CRITICAL: Smart context compression
-        final_chars = sum(len(str(m.content)) for m in messages)
-        if final_chars > MAX_SAFE_CHARS:
-            print(f"[CONTEXT] Smart compression: {final_chars} chars -> target 3.5k-5k")
-            
-            # Extract key information from all messages for synthesis
-            synthesized = self._synthesize_context(messages, state)
-            
-            # Keep only system message + synthesized context + current prompt (last msg)
-            system_msgs = [m for m in messages if isinstance(m, SystemMessage)]
-            messages = system_msgs
-            
-            if synthesized and len(synthesized) > 100:
-                messages.append(SystemMessage(content=f"=== CONTEXT SYNTHESIS ===\n{synthesized}\n==="))
-            
-            # Re-add the (possibly truncated) current prompt
-            messages.append(HumanMessage(content=context))
-            
-            final_chars = sum(len(str(m.content)) for m in messages)
-            print(f"[CONTEXT] Final compressed size: {final_chars} chars")
         
         return messages
     
@@ -670,6 +712,74 @@ Previous Domain: {state['current_domain']}
             result = result[:MAX_SYNTHESIS] + "\n[Synthesis truncated for brevity]"
             
         return result
+    
+    def _llm_synthesize_context(self, messages: list, state: AgentState) -> str:
+        """Use LLM to intelligently compress context when it exceeds 18k chars.
+        
+        Slower (~2-3s) but better semantic preservation than programmatic extraction.
+        Falls back to programmatic synthesis if LLM fails.
+        
+        Args:
+            messages: All messages in history
+            state: Current state
+            
+        Returns:
+            Compressed context string (target: 3.5k-4.5k chars)
+        """
+        try:
+            # Build a comprehensive context string from all messages
+            full_context = ""
+            for msg in messages:
+                content = str(msg.content) if hasattr(msg, 'content') else str(msg)
+                full_context += f"{type(msg).__name__}: {content[:500]}...\n\n"
+            
+            # Add state info
+            full_context += f"\n\nGoal: {state['goal']}\n"
+            full_context += f"Visited URLs: {len(state.get('visited_urls', []))}\n"
+            full_context += f"Data collected: {list(state.get('extracted_data', {}).keys())}\n"
+            
+            # Prompt for LLM
+            compression_prompt = f"""Compress this browsing/research history to 3500-4500 characters while preserving ALL critical information.
+
+FULL CONTEXT (may be very long):
+{full_context[:8000]}
+
+REQUIREMENTS:
+1. Extract and preserve:
+   - Sites/URLs visited (deduplicated domains only)
+   - Key data collected or extracted
+   - Important findings or summaries
+   - Errors/failures to avoid
+2. Target size: 3500-4500 characters (strict)
+3. Be concise but don't lose critical navigation or data context
+4. Format as bullet points for readability
+
+Output the compressed context ONLY, no preamble."""
+
+            # Use the LLM to compress
+            from langchain_core.messages import SystemMessage as SysMsg, HumanMessage as HumMsg
+            
+            response = self.llm.invoke([
+                SysMsg(content="You are a context compression expert. Preserve critical information while reducing size."),
+                HumMsg(content=compression_prompt)
+            ])
+            
+            compressed = response.content.strip()
+            
+            # Validate size
+            if len(compressed) > 5000:
+                print(f"[CONTEXT] LLM synthesis too large ({len(compressed)} chars), truncating")
+                compressed = compressed[:4500] + "\n...[LLM synthesis truncated]"
+            elif len(compressed) < 500:
+                print(f"[CONTEXT] LLM synthesis too small ({len(compressed)} chars), falling back to programmatic")
+                return self._synthesize_context(messages, state)
+            
+            print(f"[CONTEXT] LLM synthesis: {len(compressed)} chars (target 3.5k-4.5k)")
+            return compressed
+            
+        except Exception as e:
+            print(f"[CONTEXT] LLM synthesis failed ({e}), falling back to programmatic")
+            return self._synthesize_context(messages, state)
     
     def _summarize_history(self, messages: list[BaseMessage]) -> str:
         """Condense messages into ultra-compressed summary (max 10 lines)."""

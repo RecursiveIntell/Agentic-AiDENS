@@ -466,11 +466,45 @@ def run_graph_command(args: argparse.Namespace, config: AgentConfig, console: Co
     except KeyboardInterrupt:
         if json_mode:
             return 130
+        
+        # Try to run retrospective if we have state
+        if final_state and not final_state.get("retrospective_ran"):
+            _run_retrospective_on_abort(final_state, config, console)
+            
         console.print("\n[yellow]Interrupted by user[/yellow]")
         return 130
+
+
+def _run_retrospective_on_abort(state: dict, config: AgentConfig, console: Console):
+    """Run retrospective analysis when user aborts."""
+    try:
+        console.print("\n[bold yellow]⚠️  Run Aborted! Running Retrospective Learning...[/bold yellow]")
+        
+        from .graph.agents.retrospective_agent import RetrospectiveAgent
+        
+        # Inject aborted flag
+        state["was_aborted"] = True
+        
+        # Ensure minimal fields exist
+        if "messages" not in state:
+            state["messages"] = []
+            
+        agent = RetrospectiveAgent(config)
+        agent.execute(state)
+        
+        console.print("[green]✓ Retrospective captured.[/green]")
+    except Exception as e:
+        console.print(f"[dim]Failed to run retrospective: {e}[/dim]")
         
     except Exception as e:
         error_msg = str(e).lower()
+        
+        # Try to run retrospective on failure
+        if final_state and not final_state.get("retrospective_ran"):
+             # Inject the specific error into state
+            final_state["error"] = str(e)
+            _run_retrospective_on_abort(final_state, config, console)
+            
         if json_mode:
             import json
             print(json.dumps({"success": False, "error": str(e)}))

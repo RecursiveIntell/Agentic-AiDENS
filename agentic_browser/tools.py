@@ -59,6 +59,53 @@ class BrowserTools:
         """Set the current step number for screenshot naming."""
         self._step_count = step
     
+    def element_exists(self, selector: str) -> bool:
+        """Check if an element matching the selector exists on page.
+        
+        Args:
+            selector: Element selector to check
+            
+        Returns:
+            True if at least one matching element exists
+        """
+        try:
+            from .utils import format_selector
+            selector = format_selector(selector)
+            return self.page.locator(selector).count() > 0
+        except Exception:
+            return False
+    
+    def get_available_links(self, max_links: int = 10) -> list[str]:
+        """Get list of clickable link texts currently visible on page.
+        
+        Useful for suggesting alternatives when a click fails.
+        
+        Args:
+            max_links: Maximum number of links to return
+            
+        Returns:
+            List of link text strings
+        """
+        try:
+            links = []
+            all_links = self.page.locator('a').all()
+            for link in all_links[:50]:  # Check up to 50 links
+                try:
+                    text = link.text_content()
+                    if text:
+                        text = text.strip()
+                        # Filter out noise: short text, empty, or navigation items
+                        if len(text) > 3 and len(text) < 100 and text not in links:
+                            links.append(text)
+                            if len(links) >= max_links:
+                                break
+                except:
+                    continue
+            return links
+        except Exception:
+            return []
+    
+
     def execute(self, action: str, args: dict[str, Any]) -> ToolResult:
         """Execute a browser action.
         
@@ -142,81 +189,134 @@ class BrowserTools:
         Returns:
             ToolResult
         """
+        import time
+        from difflib import SequenceMatcher
+        
         original_selector = selector
         selector = format_selector(selector)
         
-        # Build list of selectors to try (limited to 4 max to reduce hang time)
-        selectors_to_try = [selector]
-        
-        # If it's a text= selector, add ONE partial match fallback only
-        if selector.startswith('text="') and selector.endswith('"'):
-            full_text = selector[6:-1]  # Extract text between quotes
+        # RETRY LOGIC: Try up to 3 times with exponential backoff
+        max_retries = 3
+        for retry_attempt in range(max_retries):
+            if retry_attempt > 0:
+                backoff_delay = 0.5 * (2 ** (retry_attempt - 1))  # 0.5s, 1s, 2s
+                print(f"[CLICK] Retry {retry_attempt}/{max_retries} after {backoff_delay}s delay (element may be loading)")
+                time.sleep(backoff_delay)
             
-            # Skip selectors with problematic special characters (›, →, etc.)
-            if any(c in full_text for c in ['›', '→', '←', '»', '«', '\u2019']):
-                # Clean the text by removing these chars
-                clean_text = full_text.replace('›', ' ').replace('→', ' ').replace('←', ' ').split()[0]
-                if len(clean_text) > 3:
-                    selectors_to_try.insert(0, f'text="{clean_text}"')
+            # Build list of selectors to try
+            selectors_to_try = [selector]
             
-            # Try shorter version (first word or 20 chars) - just ONE fallback
-            if len(full_text) > 20:
-                selectors_to_try.append(f'text="{full_text[:20]}"')
+            # FUZZY MATCHING: If it's a text= selector, add smart fallbacks
+            if selector.startswith('text="') and selector.endswith('"'):
+                full_text = selector[6:-1]  # Extract text between quotes
+                
+                # Clean problematic special characters
+                if any(c in full_text for c in ['›', '→', '←', '»', '«', '\u2019']):
+                    clean_text = full_text.replace('›', ' ').replace('→', ' ').replace('←', ' ').split()[0]
+                    if len(clean_text) > 3:
+                        selectors_to_try.insert(0, f'text="{clean_text}"')
+                
+                # Try shorter versions
+                if len(full_text) > 20:
+                    selectors_to_try.append(f'text="{full_text[:20]}"')
+                
+                # Try as link with partial text
+                selectors_to_try.append(f'a:has-text("{full_text[:25]}")')
+                
+                # FUZZY: Try to find similar links on page if exact match fails
+                try:
+                    all_links = self.page.locator('a').all()
+                    if len(all_links) > 0:
+                        # Find closest matching link text
+                        best_match = None
+                        best_similarity = 0.0
+                        for link in all_links[:30]:  # Limit to first 30 links
+                            try:
+                                link_text = link.text_content() or ""
+                                similarity = SequenceMatcher(None, full_text.lower(), link_text.lower()).ratio()
+                                if similarity > best_similarity and similarity > 0.6:  # 60% threshold
+                                    best_similarity = similarity
+                                    best_match = link_text
+                            except:
+                                continue
+                        
+                        if best_match and best_match != full_text:
+                            selectors_to_try.append(f'text="{best_match}"')
+                            print(f"[CLICK] Fuzzy match: '{full_text[:30]}...' → '{best_match[:30]}...' ({best_similarity:.2f})")
+                except:
+                    pass
             
-            # Also try as a link with partial text - limit to 1 attempt
-            selectors_to_try.append(f'a:has-text("{full_text[:25]}")')
-        
-        last_error = None
-        for try_selector in selectors_to_try:
-            try:
-                # Check if element exists first
-                locator = self.page.locator(try_selector)
-                if locator.count() > 0:
-                    # Strategy 1: Standard click (reduced from 3000ms to 1500ms)
-                    try:
-                        locator.first.click(timeout=1500)
-                        self._wait_after_click()
-                        return ToolResult(
-                            success=True,
-                            message=f"Clicked: {try_selector}",
-                            data={"url": self.page.url, "selector_used": try_selector},
-                        )
-                    except Exception as e:
-                        # Strategy 2: Force click (reduced timeout)
-                        print(f"Standard click failed: {e}. Retrying with force=True")
+            last_error = None
+            for try_selector in selectors_to_try:
+                try:
+                    # Check if element exists first
+                    locator = self.page.locator(try_selector)
+                    if locator.count() > 0:
+                        # Strategy 1: Standard click
                         try:
-                            locator.first.click(timeout=1500, force=True)
+                            locator.first.click(timeout=1500)
                             self._wait_after_click()
                             return ToolResult(
                                 success=True,
-                                message=f"Force-clicked: {try_selector}",
-                                data={"url": self.page.url, "selector_used": try_selector, "method": "force"},
+                                message=f"Clicked: {try_selector}",
+                                data={"url": self.page.url, "selector_used": try_selector},
                             )
-                        except Exception as e2:
-                            # Strategy 3: JavaScript click with timeout (was 30s default!)
-                            print(f"Force click failed: {e2}. Trying JS click (5s timeout)")
+                        except Exception as e:
+                            # Strategy 2: Force click
+                            print(f"Standard click failed: {e}. Retrying with force=True")
                             try:
-                                # Add explicit timeout to prevent 30s hangs
-                                locator.first.evaluate("element => element.click()", timeout=5000)
+                                locator.first.click(timeout=1500, force=True)
                                 self._wait_after_click()
                                 return ToolResult(
                                     success=True,
-                                    message=f"JS-clicked: {try_selector}",
-                                    data={"url": self.page.url, "selector_used": try_selector, "method": "js"},
+                                    message=f"Force-clicked: {try_selector}",
+                                    data={"url": self.page.url, "selector_used": try_selector, "method": "force"},
                                 )
-                            except Exception as e3:
-                                last_error = e3
-                                continue
-            except Exception as e:
-                last_error = e
+                            except Exception as e2:
+                                # Strategy 3: JavaScript click
+                                print(f"Force click failed: {e2}. Trying JS click (5s timeout)")
+                                try:
+                                    locator.first.evaluate("element => element.click()", timeout=5000)
+                                    self._wait_after_click()
+                                    return ToolResult(
+                                        success=True,
+                                        message=f"JS-clicked: {try_selector}",
+                                        data={"url": self.page.url, "selector_used": try_selector, "method": "js"},
+                                    )
+                                except Exception as e3:
+                                    last_error = e3
+                                    continue
+                except Exception as e:
+                    last_error = e
+                    continue
+            
+            # If all selectors failed for this retry attempt, continue to the next retry
+            if retry_attempt < max_retries - 1:
                 continue
+            else:
+                # All retries exhausted
+                break
         
-        # If all selectors failed, return the error
+        # If all selectors and retries failed, get available links for recovery
+        available_links = self.get_available_links(max_links=8)
+        
+        # Build helpful error message
+        if available_links:
+            links_preview = ", ".join(f'"{l[:30]}"' for l in available_links[:5])
+            error_msg = f"Element not found: {original_selector}. Available links on page: {links_preview}"
+        else:
+            error_msg = f"Could not click element after {max_retries} retries. Tried selectors: {selectors_to_try[:3]}... Last Error: {last_error}"
+        
         return ToolResult(
             success=False,
-            message=f"Could not click element. Tried selectors: {selectors_to_try[:3]}... Last Error: {last_error}",
-            data={"original_selector": original_selector},
+            message=error_msg,
+            data={
+                "original_selector": original_selector,
+                "available_links": available_links,
+                "suggestion": f'Try: {{"action": "click", "args": {{"selector": "text={available_links[0]}"}}}}' if available_links else "Try scrolling or using goto with a URL"
+            },
         )
+
 
     def _wait_after_click(self):
         """Helper to wait specifically after a click action."""
@@ -450,25 +550,40 @@ class BrowserTools:
                     pass
                 
                 # Auto-scroll if requested to trigger lazy loading
+                # Auto-scroll if requested to trigger lazy loading
+                # OPTIMIZED: 3-tier height-based strategy
                 if auto_scroll:
                     try:
-                        # Fast scroll to trigger lazy loading (no slow scroll-back)
-                        self.page.evaluate("""
-                            async () => {
-                                const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-                                const maxScroll = 8000;  // Reduced from 15000
-                                const height = Math.min(document.body.scrollHeight, maxScroll);
-                                
-                                // Fast scroll in large chunks (faster than before)
-                                for (let i = 0; i < height; i += 1000) {
-                                    window.scrollTo(0, i);
-                                    await delay(50);  // Reduced from 150ms
+                        page_height = self.page.evaluate("document.body.scrollHeight || 0")
+                        
+                        if page_height < 1500:
+                            # SHORT PAGE: No scroll needed - no lazy loading
+                            pass
+                        elif page_height < 5000:
+                            # MEDIUM PAGE: Single fast scroll to bottom
+                            self.page.evaluate("""
+                                () => {
+                                    window.scrollTo(0, document.body.scrollHeight);
                                 }
-                                window.scrollTo(0, document.body.scrollHeight);
-                                await delay(200);  // Reduced from 400ms
-                                // No scroll-back-up - stay at bottom
-                            }
-                        """)
+                            """)
+                            self.page.wait_for_timeout(100)  # Minimal wait
+                        else:
+                            # TALL PAGE: Chunked scroll with minimal delays
+                            # Faster than before: 2000px chunks, 30ms delays
+                            self.page.evaluate("""
+                                async () => {
+                                    const delay = ms => new Promise(r => setTimeout(r, ms));
+                                    const height = Math.min(document.body.scrollHeight, 6000);
+                                    
+                                    // 2000px chunks (was 1000px), 30ms delays (was 50ms)
+                                    for (let i = 0; i < height; i += 2000) {
+                                        window.scrollTo(0, i);
+                                        await delay(30);
+                                    }
+                                    window.scrollTo(0, document.body.scrollHeight);
+                                    await delay(100);  // Reduced from 200ms
+                                }
+                            """)
                     except Exception as e:
                         print(f"Auto-scroll warning: {e}")
 

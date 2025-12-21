@@ -9,6 +9,37 @@ from langchain_core.messages import BaseMessage
 import operator
 
 
+# =============================================================================
+# BOUNDED REDUCERS - Prevent unbounded state growth (Performance Optimization)
+# =============================================================================
+
+def bounded_message_reducer(existing: Sequence[BaseMessage], new: Sequence[BaseMessage]) -> list[BaseMessage]:
+    """Combine messages with bounded size - keep last MAX_MESSAGES.
+    
+    This prevents O(n²) context building and SQLite blob overflow.
+    16GB RAM optimized: 40 message window.
+    """
+    MAX_MESSAGES = 40
+    combined = list(existing) + list(new)
+    if len(combined) > MAX_MESSAGES:
+        print(f"[STATE] Bounded messages: {len(combined)} → {MAX_MESSAGES}")
+        return combined[-MAX_MESSAGES:]
+    return combined
+
+
+def bounded_url_reducer(existing: list[str], new: list[str]) -> list[str]:
+    """Combine URLs with bounded size and deduplication.
+    
+    Keeps last 50 unique URLs to prevent unbounded growth.
+    """
+    MAX_URLS = 50
+    # Dedupe while preserving order
+    combined = list(dict.fromkeys(existing + new))
+    if len(combined) > MAX_URLS:
+        return combined[-MAX_URLS:]
+    return combined
+
+
 class AgentState(TypedDict):
     """Shared state for multi-agent graph.
     
@@ -16,8 +47,8 @@ class AgentState(TypedDict):
     information as agents collaborate.
     """
     
-    # Message history - accumulates with operator.add
-    messages: Annotated[Sequence[BaseMessage], operator.add]
+    # Message history - bounded to 40 messages (was: operator.add)
+    messages: Annotated[Sequence[BaseMessage], bounded_message_reducer]
     
     # Original user goal
     goal: str
@@ -32,7 +63,7 @@ class AgentState(TypedDict):
     
     # Collected data
     extracted_data: dict[str, Any]
-    visited_urls: Annotated[list[str], operator.add]
+    visited_urls: Annotated[list[str], bounded_url_reducer]  # Bounded to 50 URLs
     files_accessed: Annotated[list[str], operator.add]
     
     # Error tracking
@@ -59,7 +90,7 @@ class AgentState(TypedDict):
     last_action_was_scroll: bool
     
     # Track URLs that have been scrolled (shared between agents to avoid redundant scrolling)
-    scrolled_urls: Annotated[list[str], operator.add]
+    scrolled_urls: list[str]  # URLs scrolled this session (no accumulation needed)
     
     # Retrospective Agent Tracking
     retrospective_ran: bool

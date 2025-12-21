@@ -231,16 +231,20 @@ Current URL: {current_url}
 Page Title: {page_state.get('page_title', '') or page_state.get('title', '')}
 {image_download_hint}
 Visible Text (truncated):
-{page_state.get('visible_text', '')[:2000]}
+{page_state.get('visible_text', '')[:800]}
 
 Top Links:
 {self._format_links(page_state.get('top_links', []) or page_state.get('links', []))}
 
-Already Visited:
-{chr(10).join(f'- {url}' for url in state['visited_urls'])}
+Recently Visited (last 10):
+{chr(10).join(f'- {url}' for url in list(state['visited_urls'])[-10:])}
 
 Your task: {state['goal']}
 """
+        # CRITICAL: Guard against task_context explosion
+        MAX_TASK_CONTEXT = 8000
+        if len(task_context) > MAX_TASK_CONTEXT:
+            task_context = task_context[:MAX_TASK_CONTEXT] + "\n...[Task context truncated]"
         
 
         # Vision mode: capture screenshot for LLM
@@ -253,10 +257,11 @@ Your task: {state['goal']}
                 task_context += """
 
 [VISION MODE] A screenshot of the current page is attached.
-Use the screenshot to:
-- Identify interactive elements and their text
-- Find the right buttons/links to click
-- Understand the page layout
+CRITICAL VISION RULES:
+- ONLY click elements that are ACTUALLY VISIBLE in both the screenshot AND visible text below
+- DO NOT make up button/link names - use the EXACT text you see
+- If you can't find an element in the visible text, it doesn't exist
+- Verify element text matches EXACTLY before clicking
 """
                 print("[BROWSER] Vision mode: screenshot captured")
         
@@ -391,6 +396,51 @@ Use the screenshot to:
                     print(f"[BROWSER DEBUG] Click {'successful' if result.success else 'FAILED'}, tracking selector: {selector[:50]}...")
                     existing_clicked.append(selector)
             
+            # === URL-CHANGE DETECTION (NEW) ===
+            # Track if clicks succeed but don't actually navigate
+            failed_nav_count = state.get("_failed_nav_clicks", 0)
+            same_page_actions = state.get("_same_page_actions", 0)
+            
+            if action_data.get("action") == "click" and result.success:
+                # Get URL after click
+                try:
+                    new_page_state = self._get_page_state()
+                    new_url = new_page_state.get('current_url', '') or new_page_state.get('url', '')
+                    
+                    # Compare base URLs (without query params)
+                    old_base = current_url.split('?')[0].rstrip('/')
+                    new_base = new_url.split('?')[0].rstrip('/')
+                    
+                    if old_base == new_base and new_url == current_url:
+                        # Click succeeded but URL didn't change at all
+                        failed_nav_count += 1
+                        print(f"[BROWSER] ⚠️ Click succeeded but URL unchanged ({failed_nav_count}x)")
+                        
+                        if failed_nav_count >= 3:
+                            # Too many failed navigation clicks - force back or extract
+                            print(f"[BROWSER] 🔄 Forcing back navigation - stuck on same page!")
+                            tool_content += "\n\n⚠️ WARNING: Multiple clicks succeeded but page didn't navigate. Try using 'back' to return to search results, or use 'goto' with a direct URL."
+                            failed_nav_count = 0  # Reset
+                    else:
+                        # Navigation worked, reset counter
+                        failed_nav_count = 0
+                except Exception as e:
+                    print(f"[BROWSER] URL check warning: {e}")
+            
+            # Track same-page action count
+            page_base = current_url.split('?')[0].rstrip('/')
+            last_page_base = state.get("_last_page_base", "")
+            
+            if page_base == last_page_base:
+                same_page_actions += 1
+            else:
+                same_page_actions = 1  # Reset on new page
+            
+            # If too many actions on same page without progress, warn strongly
+            if same_page_actions >= 6:
+                print(f"[BROWSER] ⚠️ {same_page_actions} actions on same page without navigating away!")
+                tool_content += f"\n\n⚠️ WARNING: You've taken {same_page_actions} actions on this page without navigating. Consider using 'back' to return to search results or 'done' to complete with current findings."
+            
             # Build updated state with loop tracking
             new_state = self._update_state(
                 state,
@@ -410,6 +460,12 @@ Use the screenshot to:
             
             # Persist recent actions for loop detection
             new_state["_recent_actions"] = recent_actions
+            
+            # Persist URL-change detection state
+            new_state["_failed_nav_clicks"] = failed_nav_count
+            new_state["_same_page_actions"] = same_page_actions
+            new_state["_last_page_base"] = page_base
+
             
             return new_state
             

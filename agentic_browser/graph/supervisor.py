@@ -279,6 +279,31 @@ When completing, synthesize ALL gathered data into a useful report:
             print(f"[DEBUG] Supervisor - Parsed Decision: {decision}")
             print(f"[DEBUG] Supervisor - Current step: {state['step_count']}, extracted_data keys: {list(state['extracted_data'].keys())}")
             
+            # === STALLED PROGRESS DETECTION (NEW) ===
+            # Track routing history to detect when same agent is stuck
+            routing_history = state.get("_routing_history", [])
+            current_route = decision.get("route_to", "browser")
+            routing_history.append(current_route)
+            if len(routing_history) > 10:
+                routing_history = routing_history[-10:]
+            
+            # Check for same agent being called repeatedly
+            if len(routing_history) >= 5:
+                last_5 = routing_history[-5:]
+                if len(set(last_5)) == 1 and last_5[0] == current_route:
+                    # Same agent 5 times in a row - check if we're making progress
+                    last_data_count = state.get("_last_data_count", 0)
+                    current_data_count = len(state.get("extracted_data", {}))
+                    
+                    if current_data_count <= last_data_count:
+                        # No new data collected in 5 consecutive calls
+                        print(f"[SUPERVISOR] ⚠️ Agent '{current_route}' called 5x without new data - forcing completion!")
+                        decision = {
+                            "route_to": "done",
+                            "final_answer": self._synthesize_report(state)
+                        }
+
+            
             # HARD ENFORCEMENT: Force completion if criteria met
             research_sources = len([k for k in state['extracted_data'].keys() if 'research_source' in k])
             
@@ -372,6 +397,9 @@ When completing, synthesize ALL gathered data into a useful report:
                 "token_usage": token_usage,
                 "step_count": state["step_count"] + 1,
                 "consecutive_errors": 0,
+                # Persist routing history for stalled-progress detection
+                "_routing_history": routing_history,
+                "_last_data_count": len(state.get("extracted_data", {})),
             }
             
         except Exception as e:
@@ -464,22 +492,36 @@ When completing, synthesize ALL gathered data into a useful report:
         return "browser"  # Fallback
     
     def _build_messages(self, state: AgentState) -> list:
-        """Build messages for supervisor decision."""
-        # Format extracted data
+        """Build messages for supervisor decision.
+        
+        Optimized to use summarized data context to save tokens.
+        """
+        # Format extracted data (SUMMARIZED)
         data = state['extracted_data']
         important_keys = [k for k in data.keys() if any(x in k for x in ['analysis', 'findings', 'summary', 'report'])]
-        other_keys = [k for k in data.keys() if k not in important_keys]
         
         formatted_data = []
-        for k in important_keys:
-            formatted_data.append(f"--- {k} ---\n{str(data[k])[:2000]}")
+        # Priority 1: Important keys (analysis/findings) - limit to 500 chars each
+        for k in important_keys[:10]:
+            val = str(data[k])
+            if len(val) > 500:
+                val = val[:500] + "...[truncated]"
+            formatted_data.append(f"--- {k} ---\n{val}")
             
-        remaining_chars = 1000
-        if other_keys:
-            other_data = {k: data[k] for k in other_keys}
-            formatted_data.append(f"--- Other Data ---\n{json.dumps(other_data, indent=2)[:remaining_chars]}")
+        # Priority 2: Other keys - limit to 100 chars each
+        other_keys = [k for k in data.keys() if k not in important_keys]
+        for k in other_keys[:10]:
+            val = str(data[k])
+            if len(val) > 100:
+                val = val[:100] + "..."
+            formatted_data.append(f"--- {k} ---\n{val}")
             
-        data_str = "\n\n".join(formatted_data)
+        # Add summary count if we skipped keys
+        skipped_count = len(data) - (len(important_keys[:10]) + len(other_keys[:10]))
+        if skipped_count > 0:
+            formatted_data.append(f"... (+ {skipped_count} other data items)")
+            
+        data_str = "\n\n".join(formatted_data) if formatted_data else "(No data collected yet)"
         
         # Format implementation plan if exists (Planning-First Architecture)
         plan_str = ""
@@ -708,7 +750,8 @@ def route_to_agent(state: AgentState) -> Literal[
     # All valid agent routes
     valid_agents = {
         "browser", "os", "research", "code", "sysadmin",
-        "network", "media", "package", "automation", "data", "workflow"
+        "network", "media", "package", "automation", "data", "workflow",
+        "retrospective"
     }
     
     if domain in valid_agents:

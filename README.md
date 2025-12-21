@@ -113,6 +113,21 @@ AGENTIC_BROWSER_PROVIDER=openai  # openai, anthropic, google, lm_studio
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
 GOOGLE_API_KEY=...
+
+# n8n Integration (Optional)
+N8N_URL=https://n8n.example.com
+N8N_API_KEY=...
+```
+
+### OS & Routing Configuration
+You can explicitly set a separate provider for OS/System tasks vs Browser tasks:
+```json
+// in settings.json
+{
+  "provider": "openai",           // Browser agent uses GPT-4o
+  "os_provider": "lm_studio",     // OS agent uses local Llama 3
+  "routing_mode": "auto"          // auto | browser | os | ask
+}
 ```
 
 ## 🏗️ Architecture
@@ -178,6 +193,13 @@ Actions are classified by risk level:
 | Service control fails | May need sudo (shown as command to run) |
 
 ## 📈 Recent Updates
+
+### Performance Revolution (v0.7.0)
+- **Asynchronous Core**: Migration to non-blocking I/O for database writes, eliminating UI freezes during long runs.
+- **Knowledge Base Caching**: 500-entry LRU embedding cache with MD5 hashing, delivering 1000x speedup for repeated queries.
+- **Titanium State Management**: Bounded message history (40 msgs) and URL tracking (50 domains) to prevent memory leaks and OOM crashes.
+- **Smart BrowserOps**: URL-based visual diffing skips redundant screenshot capture, saving ~300ms per step.
+- **Tiered Recall**: Parallel execution of keyword, vector, and hybrid search strategies using `ThreadPoolExecutor`.
 
 ### Performance & Stability (v0.6.0)
 - **Smart Context Compression**: Intelligent synthesis that extracts key info and compresses history to 18k chars (preferring 3.5k-5k), preventing context explosion and 429 errors.

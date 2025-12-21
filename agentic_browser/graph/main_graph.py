@@ -23,6 +23,7 @@ from .agents.package_agent import package_agent_node
 from .agents.automation_agent import automation_agent_node
 from .agents.planner_agent import planner_agent_node
 from .agents.workflow_agent import workflow_agent_node
+from .agents.retrospective_agent import retrospective_agent_node
 
 
 def build_agent_graph(checkpointer: MemorySaver | None = None):
@@ -66,6 +67,7 @@ def build_agent_graph(checkpointer: MemorySaver | None = None):
     graph.add_node("package", package_agent_node)
     graph.add_node("automation", automation_agent_node)
     graph.add_node("workflow", workflow_agent_node)
+    graph.add_node("retrospective", retrospective_agent_node)
     
     # Planning-First: Planner runs first
     graph.add_node("planner", planner_agent_node)
@@ -92,6 +94,7 @@ def build_agent_graph(checkpointer: MemorySaver | None = None):
             "package": "package",
             "automation": "automation",
             "workflow": "workflow",
+            "retrospective": "retrospective",
             "__end__": END,
         }
     )
@@ -117,6 +120,7 @@ def build_agent_graph(checkpointer: MemorySaver | None = None):
     graph.add_conditional_edges("package", check_task_complete, {"supervisor": "supervisor", "__end__": END})
     graph.add_conditional_edges("automation", check_task_complete, {"supervisor": "supervisor", "__end__": END})
     graph.add_conditional_edges("workflow", check_task_complete, {"supervisor": "supervisor", "__end__": END})
+    graph.add_conditional_edges("retrospective", check_task_complete, {"supervisor": "supervisor", "__end__": END})
     
     # Compile with optional checkpointer
     if checkpointer:
@@ -270,23 +274,36 @@ class MultiAgentRunner:
                     "recursion_limit": 50,  # Allow more agent interactions
                 },
             ):
-                # PERSISTENCE: Update session store
+                # PERSISTENCE: Update session store (THROTTLED for performance)
                 if self.session_store:
                     for node_name, node_state in event.items():
-                        # Update full session state
-                        self.session_store.update_session(self.session_id, node_state)
+                        # THROTTLE: Only persist every 3 steps or on completion
+                        step_count = node_state.get("step_count", 0)
+                        is_finished = node_state.get("task_complete", False)
+                        
+                        if is_finished or step_count % 3 == 0 or step_count == 1:
+                            self.session_store.update_session(self.session_id, node_state)
                         
                         # Log step if applicable
                         if "messages" in node_state and len(node_state["messages"]) > 0:
                             last_msg = node_state["messages"][-1]
                             agent_name = node_name
+                            step_num = node_state.get("step_count", 0)
+                            
+                            # VECTOR DB: Persist message to separate table
+                            role = type(last_msg).__name__.replace("Message", "").lower()  # SystemMessage -> system
+                            content = str(last_msg.content) if hasattr(last_msg, 'content') else str(last_msg)
+                            try:
+                                self.session_store.add_message(self.session_id, role, content, step_num)
+                            except Exception as e:
+                                print(f"[SESSION] Message save failed: {e}")
                             
                             # Log tool calls or text
                             if hasattr(last_msg, 'tool_calls') and last_msg.tool_calls:
                                 for tc in last_msg.tool_calls:
                                     self.session_store.add_step(
                                         self.session_id,
-                                        node_state.get("step_count", 0),
+                                        step_num,
                                         agent_name,
                                         tc.get("name"),
                                         tc.get("args"),
@@ -297,25 +314,14 @@ class MultiAgentRunner:
                                 # Log simplified thought
                                 self.session_store.add_step(
                                     self.session_id,
-                                    node_state.get("step_count", 0),
+                                    step_num,
                                     agent_name,
                                     "think",
                                     {"text": content[:200]},
                                     None
                                 )
 
-                    # STRATEGY EXTRACTION: If task completed successfully, crystallize strategy
-                    # Check if event contains 'supervisor' or final state indicating success
-                    # We check the event dict values for 'task_complete'
-                    for node_state in event.values():
-                        if node_state.get("task_complete"):
-                            final_ans = node_state.get("final_answer")
-                            error = node_state.get("error")
-                            if final_ans and not error:
-                                try:
-                                    self._extract_and_save_strategy(goal, final_ans)
-                                except Exception as e:
-                                    print(f"⚠️ Strategy extraction failed: {e}")
+
                 
                 yield event
             
@@ -331,11 +337,7 @@ class MultiAgentRunner:
                  except:
                      pass
             
-            # APOCALYPSE RECORDING: Learn from this failure
-            try:
-                self._record_failure(goal, str(e))
-            except Exception as rec_err:
-                print(f"⚠️ Apocalypse recording failed: {rec_err}")
+
 
             # Handle empty response errors from Anthropic/OpenAI
             if "empty" in error_msg or "must contain" in error_msg:
@@ -379,114 +381,4 @@ class MultiAgentRunner:
             return str(messages[-1].content) if hasattr(messages[-1], 'content') else str(messages[-1])
         return "No result"
     
-    def _record_failure(self, goal: str, error: str) -> None:
-        """Record a failure to the Apocalypse Bank for learning.
-        
-        Uses LLM to extract a generalizable error pattern.
-        """
-        from .agents.base import create_llm_client
-        from .knowledge_base import get_knowledge_base
-        
-        # Get config from registry
-        tools = self._registry.get(self.session_id)
-        if not tools:
-            return
-            
-        try:
-            llm = create_llm_client(tools.config)
-            
-            from langchain_core.messages import SystemMessage, HumanMessage
-            
-            prompt = f"""
-            Analyze this failure and extract a GENERALIZABLE lesson.
-            
-            GOAL: {goal}
-            ERROR: {error}
-            
-            Produce a JSON object:
-            {{
-                "error_pattern": "Short error type (3-5 words)",
-                "description": "How to avoid this mistake next time (1-2 sentences)"
-            }}
-            """
-            
-            resp = llm.invoke([
-                SystemMessage(content="You extract failure patterns to help agents learn."),
-                HumanMessage(content=prompt)
-            ])
-            
-            # Parse JSON
-            content = resp.content.strip()
-            if "```" in content:
-                content = content.split("```")[1].replace("json", "").strip()
-            
-            import json
-            data = json.loads(content)
-            error_pattern = data.get("error_pattern", "Unknown Error")
-            description = data.get("description", "No description")
-            
-            # Determine which agent failed based on error or state
-            # For now, record to both since we can't easily determine
-            kb = get_knowledge_base()
-            kb.save_apocalypse("planner", error_pattern, description)
-            kb.save_apocalypse("research", error_pattern, description)
-            
-            print(f"💀 Apocalypse Recorded: {error_pattern}")
-            
-        except Exception as e:
-            print(f"⚠️ LLM Apocalypse extraction failed: {e}")
 
-    def _extract_and_save_strategy(self, goal: str, final_answer: str) -> None:
-        """Extract a successful strategy from the current run and save it.
-        
-        Args:
-            goal: The original goal
-            final_answer: The final result
-        """
-        from .agents.base import create_llm_client
-        from .knowledge_base import get_knowledge_base
-        
-        tools = self._registry.get(self.session_id)
-        if not tools:
-            return
-            
-        try:
-            llm = create_llm_client(tools.config)
-            from langchain_core.messages import SystemMessage, HumanMessage
-            
-            prompt = f"""
-            Analyze this successful task and CRYSTALLIZE the winning strategy.
-            
-            GOAL: {goal}
-            RESULT: {final_answer}
-            
-            Produce a JSON object:
-            {{
-                "strategy_name": "Short name for this approach (3-5 words)",
-                "description": "High-level steps to solve similar problems again (1-3 sentences)"
-            }}
-            """
-            
-            resp = llm.invoke([
-                SystemMessage(content="You crystallize winning strategies for browser agents."),
-                HumanMessage(content=prompt)
-            ])
-            
-            content = resp.content.strip()
-            if "```" in content:
-                content = content.split("```")[1].replace("json", "").strip()
-            
-            import json
-            data = json.loads(content)
-            name = data.get("strategy_name", "General Approach")
-            desc = data.get("description", "Follow the standard procedure.")
-            
-            kb = get_knowledge_base()
-            # Save for both planner and research agents for maximum recall
-            kb.save_strategy("planner", name, desc)
-            kb.save_strategy("research", name, desc)
-            
-            print(f"💎 Strategy Crystallized: {name}")
-            
-        except Exception as e:
-            print(f"⚠️ Strategy crystallization failed: {e}")

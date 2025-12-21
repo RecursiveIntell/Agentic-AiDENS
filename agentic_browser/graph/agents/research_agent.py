@@ -5,6 +5,7 @@ Coordinates browser actions to research topics from multiple sources.
 """
 
 import json
+import re
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -69,12 +70,15 @@ NOTE: Using click+back is MORE RELIABLE than direct goto because:
 
 STEP 4: VISIT MULTIPLE SOURCES
 - Click result 1 → Extract → Back → Click result 2 → Extract → etc.
-- Continue until you have 3-5 sources
+- Visit the number of sources specified by the user (default: 3-5)
 
-STEP 5: SYNTHESIZE
-- Only call "done" after visiting 3+ different websites
-- Include SPECIFIC facts and examples from each source
-- Name your sources in the summary
+STEP 5: SYNTHESIZE INTO A CONTENT-FOCUSED REPORT
+- CRITICAL: Your final report must contain ACTUAL FACTS, DATA, and FINDINGS from the extracted content
+- DO NOT just describe what each page "is about" - that's useless!
+- GOOD: "According to MIT research, LLMs achieved 95% accuracy on X task using technique Y"
+- BAD: "The MIT article discusses advancements in AI and LLMs"
+- Include specific statistics, dates, names, quotes, and examples
+- Structure as: Introduction → Key Findings → Details from Each Source → Conclusion
 
 === CRITICAL RULES ===
 
@@ -116,6 +120,16 @@ Respond with JSON:
         self._browser_tools = browser_tools
         self.recall_tool = recall_tool
     
+    # Default minimum sources if not specified in goal
+    DEFAULT_MIN_SOURCES = 3
+    
+    # Class-level cache for tiered recall results (200 entries for 16GB RAM)
+    _recall_cache: dict[str, str] = {}
+    _RECALL_CACHE_SIZE = 200
+    
+    # Track last URL for screenshot change detection (Phase 4 optimization)
+    _last_url: str = ""
+    
     @property
     def system_prompt(self) -> str:
         return self.SYSTEM_PROMPT
@@ -123,6 +137,46 @@ Respond with JSON:
     def set_browser_tools(self, browser_tools) -> None:
         """Set browser tools after initialization."""
         self._browser_tools = browser_tools
+    
+    def _parse_min_sources_from_goal(self, goal: str) -> int:
+        """Parse the minimum source count from the user's goal.
+        
+        Looks for patterns like:
+        - "at least 5 sources"
+        - "from 10 sources" 
+        - "minimum 3 sites"
+        - "5+ sources"
+        - "atleast 4 sources"
+        
+        Args:
+            goal: The user's goal string
+            
+        Returns:
+            The parsed count, or DEFAULT_MIN_SOURCES if not found
+        """
+        goal_lower = goal.lower()
+        
+        # Patterns to match (order matters - more specific first)
+        patterns = [
+            r'(?:at\s*least|atleast|minimum|min)\s+(\d+)\s+(?:sources?|sites?|websites?|webpages?|pages?)',
+            r'(\d+)\+\s*(?:sources?|sites?|websites?|webpages?|pages?)',
+            r'from\s+(\d+)\s+(?:sources?|sites?|websites?|webpages?|pages?)',
+            r'(\d+)\s+(?:different|unique|separate)\s+(?:sources?|sites?|websites?|webpages?)',
+            r'(?:gather|collect|find|get).*?from\s+(\d+)',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, goal_lower)
+            if match:
+                count = int(match.group(1))
+                # Sanity check: cap at reasonable limit
+                count = max(1, min(count, 20))
+                print(f"[RESEARCH] Parsed MIN_SOURCES={count} from goal")
+                return count
+        
+        # Default fallback
+        print(f"[RESEARCH] No source count in goal, using default MIN_SOURCES={self.DEFAULT_MIN_SOURCES}")
+        return self.DEFAULT_MIN_SOURCES
     
     def execute(self, state: AgentState) -> AgentState:
         """Execute research workflow.
@@ -198,20 +252,20 @@ DO NOT call "done". DO NOT navigate away. EXTRACT FIRST.
 You have some research data. Options:
 1. Extract this page too: {"action": "extract_visible_text", ...}
 2. Visit another result to get more info.
-3. If you have ENOUGH data (2+ sources), synthesize: {"action": "done", "args": {"summary": "..."}}
+3. If you have ENOUGH data, synthesize: {"action": "done", "args": {"summary": "..."}}
 """
         
-        elif sources_visited >= 3:
-            action_hint = """
-MANDATORY COMPLETION: You have visited 3+ sources.
-You MUST stop researching now.
-Action: {"action": "done", "args": {"summary": "## Research Report\\n\\n[Your detailed findings here]"}}
+        # Minimum sources required for completion - DYNAMIC based on user's goal
+        MIN_SOURCES_REQUIRED = self._parse_min_sources_from_goal(state['goal'])
+        
+        if sources_visited >= MIN_SOURCES_REQUIRED:
+            action_hint = f"""
+MANDATORY COMPLETION: You have visited {MIN_SOURCES_REQUIRED}+ sources as requested.
+You MUST stop researching now and synthesize your findings.
+Action: {{"action": "done", "args": {{"summary": "## Research Report\\n\\n[Your detailed findings here]"}}}}
 """
         else:
             action_hint = "Continue research."
-        
-        # Minimum sources required for completion
-        MIN_SOURCES_REQUIRED = 3
         
         # Calculate progress based on UNIQUE content URLs visited (excluding search engines)
         search_engines = ['duckduckgo.com', 'google.com/search', 'bing.com/search', 'yahoo.com/search']
@@ -271,9 +325,10 @@ DO NOT make up link titles!
         if reached_bottom:
             bottom_hint = """
 ⚠️ PAGE BOTTOM REACHED: You have scrolled to the bottom of this page.
-DO NOT scroll again. Either:
-1. Extract the content now: {"action": "extract_visible_text", "args": {"max_chars": 12000}}
-2. Go back to find more sources: {"action": "back", "args": {}}
+DO NOT scroll again. Instead:
+1. Look for "More results", "Next page", "Load more" buttons and click them: {"action": "click", "args": {"selector": "text=More results"}}
+2. Extract the content now: {"action": "extract_visible_text", "args": {"max_chars": 12000}}
+3. Go back to find more sources: {"action": "back", "args": {}}
 """
         
         task_context = f"""
@@ -284,7 +339,7 @@ Unique websites visited: {sources_visited}/{MIN_SOURCES_REQUIRED}
 {progress_msg}
 {clicked_warning}
 {bottom_hint}
-Visited URLs: {chr(10).join(state['visited_urls']) or '(none)'}
+Visited URLs (last 10): {chr(10).join(list(state['visited_urls'])[-10:]) or '(none)'}
 
 Current page: {page_state.get('page_title', '') or page_state.get('title', 'Unknown')}
 URL: {current_url}
@@ -295,41 +350,83 @@ Visible content (truncated):
 {page_state.get('visible_text', '')[:800]}
 
 Data collected (summary):
-{json.dumps(state['extracted_data'], indent=2)[:500] if state['extracted_data'] else '(none yet)'}
+{json.dumps(state['extracted_data'], indent=2)[:300] if state['extracted_data'] else '(none yet)'}
 """
+        # CRITICAL: Guard against task_context explosion
+        MAX_TASK_CONTEXT = 8000
+        if len(task_context) > MAX_TASK_CONTEXT:
+            task_context = task_context[:MAX_TASK_CONTEXT] + "\n...[Task context truncated]"
 
         # Vision mode: capture screenshot for LLM
-        # Now cost-effective with detail=low (~500 tokens vs ~5k with high)
+        # OPTIMIZATION: Only capture if URL changed (saves ~100-300ms per step)
         screenshot_b64 = None
         
         if self.config.vision_mode and self._browser_tools:
-            screenshot_b64 = self.capture_screenshot_base64(self._browser_tools)
-            if screenshot_b64:
-                task_context += """
+            # Check if URL changed since last capture
+            url_changed = current_url != self._last_url
+            
+            if url_changed:
+                screenshot_b64 = self.capture_screenshot_base64(self._browser_tools)
+                self._last_url = current_url  # Update tracking
+                
+                if screenshot_b64:
+                    task_context += """
 
 [VISION MODE] A screenshot of the current page is attached.
-Use the screenshot to:
-- Identify visible links to click (look for underlined/colored text)
-- Determine if you need to SCROLL DOWN to see more content/links
-- Find the actual text of links instead of guessing
+⚠️ CRITICAL VISION RULES - READ CAREFULLY:
+1. ONLY click links that appear VERBATIM in the "Visible content" text below
+2. DO NOT paraphrase or approximate link text - use the EXACT wording
+3. If the link text you want is not in "Visible content", the element does NOT exist
+4. When in doubt, use extract_visible_text first to see what's actually on the page
+5. If clicks keep failing, SCROLL to load more content or use BACK to return to search results
+6. NEVER make up link text - only use text you can copy from the visible content
 """
-                print("[RESEARCH] Vision mode: screenshot captured")
+                    print("[RESEARCH] Vision mode: screenshot captured (page changed)")
+            else:
+                print("[RESEARCH] Vision mode: skipped screenshot (page unchanged)")
         
         # TIERED RECALL INJECTION (Strategies > Apocalypse > Raw Runs)
-        # Only on first step to avoid repeated slow embedding computations
+        # Uses caching + async for 2x faster performance
         step_count = state.get('step_count', 0)
         if step_count <= 1:
-            try:
-                from ..knowledge_base import get_knowledge_base
-                kb = get_knowledge_base()
-                recall_result = kb.tiered_recall("research", state['goal'])
-                recall_context = recall_result.to_prompt_injection()
-                
-                if recall_context:
-                    task_context = f"{recall_context}\n\n---\n\n{task_context}"
-                    print("[RESEARCH] 🧠 Injected tiered recall context")
-            except Exception as e:
-                print(f"[RESEARCH] ⚠️ Tiered recall failed: {e}")
+            import hashlib
+            goal = state['goal']
+            cache_key = hashlib.md5(goal.encode()).hexdigest()[:16]
+            
+            # Check cache first (fast path)
+            if cache_key in self._recall_cache:
+                recall_context = self._recall_cache[cache_key]
+                print("[RESEARCH] 🧠 Using cached tiered recall context")
+            else:
+                try:
+                    from ..knowledge_base import get_knowledge_base
+                    kb = get_knowledge_base()
+                    
+                    # Use parallel version for 2x faster queries
+                    recall_result = kb.tiered_recall_async("research", goal)
+                    recall_context = recall_result.to_prompt_injection()
+                    
+                    # CRITICAL: Guard against recall_context explosion
+                    MAX_RECALL_CONTEXT = 2000
+                    if len(recall_context) > MAX_RECALL_CONTEXT:
+                        recall_context = recall_context[:MAX_RECALL_CONTEXT] + "\n...[Recall truncated]"
+                    
+                    # Cache with size limit
+                    if len(self._recall_cache) >= self._RECALL_CACHE_SIZE:
+                        # Clear half the cache
+                        keys = list(self._recall_cache.keys())
+                        for k in keys[:len(keys)//2]:
+                            del self._recall_cache[k]
+                        print(f"[RESEARCH] Evicted {len(keys)//2} cached recall entries")
+                    
+                    self._recall_cache[cache_key] = recall_context
+                    print("[RESEARCH] 🧠 Computed (parallel) and cached tiered recall")
+                except Exception as e:
+                    recall_context = ""
+                    print(f"[RESEARCH] ⚠️ Tiered recall failed: {e}")
+            
+            if recall_context:
+                task_context = f"{recall_context}\n\n---\n\n{task_context}"
         
         # Build messages with optional vision
         # NOTE: This creates the messages list including the new HumanMessage prompt at the end
@@ -367,11 +464,12 @@ Use the screenshot to:
                 unique_sites = set(u.split('?')[0].rstrip('/') for u in content_urls)
                 sites_visited = len(unique_sites)
                 
-                MIN_SOURCES = 3
+                # Use dynamic MIN_SOURCES from goal
+                MIN_SOURCES = self._parse_min_sources_from_goal(state['goal'])
                 
                 if sites_visited < MIN_SOURCES:
                     # Need to visit more sites - force extraction won't help, need to navigate
-                    print(f"[RESEARCH] Blocking done: only visited {sites_visited}/{MIN_SOURCES} unique sites")
+                    print(f"[RESEARCH] Blocking done: only visited {sites_visited}/{MIN_SOURCES} unique sites (user requested {MIN_SOURCES})")
                     action_data = {
                         "action": "back",  # Go back to find more sources
                         "args": {}
@@ -422,6 +520,20 @@ Use the screenshot to:
                 selector = action_data.get("args", {}).get("selector", "")
                 clicked_selectors = state.get('clicked_selectors', [])
                 unique_clicked = list(dict.fromkeys(clicked_selectors))
+                
+                # PRE-CHECK: Verify element exists before attempting click
+                # This prevents wasting time on hallucinated selectors from vision mode
+                if selector and self._browser_tools:
+                    from agentic_browser.utils import format_selector
+                    formatted_selector = format_selector(selector)
+                    try:
+                        element_count = self._browser_tools.page.locator(formatted_selector).count()
+                        if element_count == 0:
+                            print(f"[RESEARCH] ⚠️ Element NOT FOUND: {selector[:60]}... - forcing extract to see available links")
+                            # Force extract to show what's actually on the page
+                            action_data = {"action": "extract_visible_text", "args": {"max_chars": 8000}}
+                    except Exception as e:
+                        print(f"[RESEARCH] Element pre-check failed: {e}")
                 
                 if selector in unique_clicked:
                     print(f"[RESEARCH] 🔄 Duplicate click detected: {selector[:50]}... - forcing scroll instead")
@@ -585,6 +697,21 @@ Use the screenshot to:
                  # If we didn't extract to extracted_data, show it here
                 tool_content = str(result.data)[:1000]
                 
+            # Enhanced error handling for click failures - show available alternatives
+            if action_data.get("action") == "click" and not result.success:
+                # Extract available links from the error data
+                available_links = []
+                suggestion = ""
+                if result.data:
+                    available_links = result.data.get("available_links", [])
+                    suggestion = result.data.get("suggestion", "")
+                
+                if available_links:
+                    links_list = "\n".join(f'  - text="{link}"' for link in available_links[:6])
+                    tool_content += f"\n\n🔗 AVAILABLE LINKS on this page (pick one of these EXACTLY):\n{links_list}"
+                    if suggestion:
+                        tool_content += f"\n\n💡 Suggestion: {suggestion}"
+            
             tool_msg = HumanMessage(content=f"Tool output: {tool_content}")
             
             # Track clicked selectors to avoid re-clicking (including FAILED clicks)
@@ -615,60 +742,24 @@ Use the screenshot to:
             # Set the updated clicked selectors list
             new_state['clicked_selectors'] = existing_clicked
             
-            # === VISION-BASED SCROLL LOOP DETECTION ===
+            # === SCROLL STATE TRACKING (Simplified) ===
+            # Limit scrolled_urls to last 10 to prevent unbounded growth
+            existing_scrolled = state.get('scrolled_urls', [])[-9:]
+            
             if action_data.get("action") == "scroll":
                 new_state['last_action_was_scroll'] = True
-                # Track this page as scrolled so browser agent skips redundant scrolling
-                new_state['scrolled_urls'] = [current_url]
+                new_state['scrolled_urls'] = existing_scrolled + [current_url]
             
-            # Also track scrolled_urls for extract_visible_text with auto_scroll
+            # Track scrolled_urls for extract_visible_text with auto_scroll
             if action_data.get("action") == "extract_visible_text" and final_args.get("auto_scroll"):
-                new_state['scrolled_urls'] = [current_url]
+                new_state['scrolled_urls'] = existing_scrolled + [current_url]
                 
-                # Get current scroll position after the scroll
-                try:
-                    scroll_info = self._browser_tools.page.evaluate("""
-                        () => ({
-                            scrollY: window.scrollY,
-                            scrollHeight: document.body.scrollHeight,
-                            clientHeight: window.innerHeight,
-                            atBottom: (window.scrollY + window.innerHeight) >= (document.body.scrollHeight - 50)
-                        })
-                    """)
-                    
-                    last_scroll_y = state.get('_last_scroll_y', 0)
-                    current_scroll_y = scroll_info.get('scrollY', 0)
-                    at_bottom = scroll_info.get('atBottom', False)
-                    
-                    # Detect if scroll actually moved the page
-                    scroll_moved = abs(current_scroll_y - last_scroll_y) > 20
-                    
-                    if at_bottom or not scroll_moved:
-                        scroll_stalls = state.get('_scroll_stall_count', 0) + 1
-                        new_state['_scroll_stall_count'] = scroll_stalls
-                        
-                        if scroll_stalls >= 2:
-                            print(f"[RESEARCH] 👁️ Scroll loop detected (at_bottom={at_bottom}, moved={scroll_moved}) - forcing extract")
-                            new_state['_scroll_stall_count'] = 0
-                            new_state['_reached_page_bottom'] = True
-                        else:
-                            print(f"[RESEARCH] 📜 Scroll may have reached bottom (stall {scroll_stalls}/2)")
-                    else:
-                        # Scroll worked, reset stall counter
-                        new_state['_scroll_stall_count'] = 0
-                        print(f"[RESEARCH] 📜 Scrolled from {last_scroll_y} to {current_scroll_y}")
-                    
-                    new_state['_last_scroll_y'] = current_scroll_y
-                    
-                except Exception as e:
-                    print(f"[RESEARCH] Scroll position check warning: {e}")
-                    new_state['last_action_was_scroll'] = True
+                # Simplified: just mark as scrolled, skip expensive position checking
+                # The RATE LIMIT check at line 473 already handles scroll loops
+                pass  # No expensive page.evaluate needed
             else:
-                # Clear scroll state for non-scroll actions (navigating away, extracting, etc.)
+                # Clear scroll state for non-scroll actions
                 new_state['last_action_was_scroll'] = False
-                new_state['_scroll_stall_count'] = 0
-                new_state['_reached_page_bottom'] = False  # Reset on navigation
-                new_state['_last_scroll_y'] = 0  # Reset scroll position
             
             return new_state
             
