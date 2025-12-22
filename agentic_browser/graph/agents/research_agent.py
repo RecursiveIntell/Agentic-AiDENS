@@ -96,6 +96,8 @@ STEP 5: SYNTHESIZE INTO A CONTENT-FOCUSED REPORT
 
 6. FOLLOW USER REQUIREMENTS: If user asks for "10 examples", gather 10+ examples
 
+7. SKIP SPONSORED/AD LINKS! Never click links containing "Sponsored", "Ad", "Advertisement", or marked as ads
+
 === ERROR RECOVERY ===
 - If a site fails (404, CAPTCHA, paywall), go BACK and try the next result
 - After 3 failures in a row, synthesize what you have and call "done"
@@ -204,6 +206,29 @@ Respond with JSON:
         sources_visited = len([u for u in state['visited_urls'] if u and 'duckduckgo' not in u])
         current_url = page_state.get('current_url', '') or page_state.get('url', 'about:blank')
         
+        # === SIMPLE ACTION TRACKING (PARITY WITH BROWSER AGENT) ===
+        # Don't use URL comparison - it's unreliable. Just track actions globally.
+        recent_actions_list = list(state.get("recent_actions", []))
+        
+        # === AUTO-NAVIGATION FIX ===
+        # If we're on about:blank or empty page, FORCE navigation to DuckDuckGo
+        # This prevents agents from extracting empty pages and getting stuck
+        if current_url == 'about:blank' or not current_url or current_url.startswith('about:'):
+            # Build search query from goal
+            goal = state['goal']
+            # Extract key search terms (simple approach)
+            search_query = goal.replace(' ', '+')[:100]
+            search_url = f"https://duckduckgo.com/?q={search_query}"
+            
+            print(f"[RESEARCH] 🚀 AUTO-NAVIGATING: Browser on blank page, opening DuckDuckGo")
+            self._browser_tools.execute("goto", {"url": search_url})
+            
+            return self._update_state(
+                state,
+                messages=[AIMessage(content=f"Auto-navigating to search: {search_url}")],
+                visited_url=search_url,
+            )
+        
         # Determine next action hint
         # Loop Protection & Intelligent Hints
         visited_search = any('duckduckgo.com' in u for u in state['visited_urls'])
@@ -212,13 +237,14 @@ Respond with JSON:
             if sources_visited == 0:
                  action_hint = """
 CRITICAL: You have search results but haven't visited any sites yet.
-1. Extract text to find links: {"action": "extract_visible_text", ...}
-2. MUST visit at least 1 result: {"action": "goto", "args": {"url": "https://..."}}
-DO NOT call "done" yet.
+1. Look at the visible content below to find search result titles
+2. CLICK a result link using text= selector: {"action": "click", "args": {"selector": "text=Article Title Here"}}
+3. If no good links visible, SCROLL first: {"action": "scroll", "args": {"amount": 500}}
+DO NOT call "done" yet - you need to visit actual websites!
 """
             else:
                  action_hint = """
-1. If you need more info, visit another result.
+1. If you need more info, CLICK another search result
 2. If satisfied, synthesize findings: {"action": "done", ...}
 """
         elif current_url == 'about:blank' or not current_url or current_url.startswith('about:'):
@@ -227,11 +253,12 @@ ACTION REQUIRED: Start your search immediately!
 Construct a search URL: {"action": "goto", "args": {"url": "https://duckduckgo.com/?q=your+search+query"}}
 """
         elif 'duckduckgo.com' in current_url:
-            # We are on search results
+            # We are on search results - CLICK, don't goto
              action_hint = """
-You are on search results.
-1. Extract text: {"action": "extract_visible_text", "args": {"max_chars": 5000}}
-2. Then visit a result: {"action": "goto", "args": {"url": "https://..."}}
+You are on SEARCH RESULTS. You MUST click a result to visit it:
+1. Look at the visible content below for clickable titles
+2. CLICK a result: {"action": "click", "args": {"selector": "text=Result Title Here"}}
+3. If no links visible, SCROLL: {"action": "scroll", "args": {"amount": 500}}
 """
         elif 'duckduckgo.com' not in current_url and current_url != 'about:blank':
             # Content page logic - MUST extract before anything else
@@ -259,14 +286,62 @@ You have some research data. Options:
         # Minimum sources required for completion - DYNAMIC based on user's goal
         MIN_SOURCES_REQUIRED = self._parse_min_sources_from_goal(state['goal'])
         
-        if sources_visited >= MIN_SOURCES_REQUIRED:
+        # Count UNIQUE content sources (excluding search engines)
+        search_engines = ['duckduckgo.com', 'google.com/search', 'bing.com/search', 'yahoo.com/search']
+        content_urls = [
+            u for u in state.get('visited_urls', []) 
+            if u and not any(se in u.lower() for se in search_engines)
+        ]
+        unique_sites = set(u.split('?')[0].rstrip('/') for u in content_urls)
+        sources_visited_actual = len(unique_sites)
+        
+        # Count research_source keys in extracted_data
+        research_source_count = len([k for k in state['extracted_data'].keys() if 'research_source' in k])
+        
+        # === FORCED AUTO-COMPLETION ===
+        # If we have enough sources, STOP immediately and synthesize
+        if research_source_count >= MIN_SOURCES_REQUIRED:
+            print(f"[RESEARCH] ✅ GOAL MET! {research_source_count} sources collected (needed {MIN_SOURCES_REQUIRED}). Auto-completing...")
+            
+            # Synthesize findings into a detailed report - include MORE content per source
+            findings = []
+            for key, value in state['extracted_data'].items():
+                if 'research_source' in key or 'browser_extract' in key:
+                    # Include up to 2000 chars per source for detailed content
+                    content = str(value)[:2000]
+                    if len(str(value)) > 2000:
+                        content += "..."
+                    findings.append(f"### {key}\n{content}\n")
+            
+            # Build a proper detailed report
+            summary = f"""## Research Report: {state['goal'][:100]}
+
+**Sources Collected:** {research_source_count}
+
+---
+
+{chr(10).join(findings[:5])}
+
+---
+
+**Note:** Above is the full extracted content from each source. Review for specific details like prices, specifications, dates, and actionable information.
+"""
+            return self._update_state(
+                state,
+                task_complete=False,  # Let supervisor decide final completion
+                final_answer=summary,
+                extracted_data={"research_findings": summary},
+                step_update={"status": "completed", "outcome": f"Research complete with {research_source_count} sources"}
+            )
+        
+        if sources_visited_actual >= MIN_SOURCES_REQUIRED:
             action_hint = f"""
 MANDATORY COMPLETION: You have visited {MIN_SOURCES_REQUIRED}+ sources as requested.
 You MUST stop researching now and synthesize your findings.
 Action: {{"action": "done", "args": {{"summary": "## Research Report\\n\\n[Your detailed findings here]"}}}}
 """
         else:
-            action_hint = "Continue research."
+            action_hint = f"Continue research. Need {MIN_SOURCES_REQUIRED - sources_visited_actual} more sources."
         
         # Calculate progress based on UNIQUE content URLs visited (excluding search engines)
         search_engines = ['duckduckgo.com', 'google.com/search', 'bing.com/search', 'yahoo.com/search']
@@ -320,6 +395,21 @@ Use ONLY selectors from the visible content below. Look for real link text like:
 DO NOT make up link titles!
 """
         
+        # === ROOT CAUSE FIX: Show LLM what it already tried ===
+        recent_actions_list = state.get('recent_actions', [])
+        if recent_actions_list:
+            actions_str = "\n".join(f"  - {a}" for a in recent_actions_list[-5:])
+            recent_actions_hint = f"""
+⚠️ YOUR RECENT ACTIONS (DO NOT REPEAT!):\n{actions_str}
+
+Choose a DIFFERENT action! Options:
+- Click a link you HAVEN'T clicked yet
+- Use 'back' to return to search results
+- Use 'done' if you have enough data
+"""
+        else:
+            recent_actions_hint = ""
+        
         # Check if we've reached the bottom of the page (from scroll detection)
         reached_bottom = state.get('_reached_page_bottom', False)
         bottom_hint = ""
@@ -339,6 +429,7 @@ RESEARCH TASK: {state['goal']}
 Unique websites visited: {sources_visited}/{MIN_SOURCES_REQUIRED}
 {progress_msg}
 {clicked_warning}
+{recent_actions_hint}
 {bottom_hint}
 Visited URLs (last 10): {chr(10).join(list(state['visited_urls'])[-10:]) or '(none)'}
 
@@ -532,8 +623,8 @@ Data collected (summary):
                         print(f"[RESEARCH] Element pre-check failed: {e}")
                 
                 if selector in unique_clicked:
-                    print(f"[RESEARCH] 🔄 Duplicate click detected: {selector[:50]}... - forcing scroll instead")
-                    action_data = {"action": "scroll", "args": {"amount": 800}}
+                    print(f"[RESEARCH] 🔄 Duplicate click detected: {selector[:50]}... - using BACK instead")
+                    action_data = {"action": "back", "args": {}}
             
             # Auto-extract before going back if on a content page
             if action_data.get("action") == "back":
@@ -757,6 +848,16 @@ Data collected (summary):
                 # Clear scroll state for non-scroll actions
                 new_state['last_action_was_scroll'] = False
             
+            # === PERSIST URL AND ACTION TRACKING (PARITY WITH BROWSER AGENT) ===
+            new_state['_research_last_url'] = current_url
+            
+            # Track action for loop detection
+            action_name = action_data.get("action", "unknown")
+            recent_actions_list.append(action_name)
+            if len(recent_actions_list) > 10:
+                recent_actions_list = recent_actions_list[-10:]
+            new_state['recent_actions'] = recent_actions_list
+            
             return new_state
             
         except Exception as e:
@@ -769,6 +870,18 @@ Data collected (summary):
         """Parse LLM response into action dict."""
         try:
             content = response.strip()
+            
+            # Detect LLM refusals before trying JSON parse
+            refusal_patterns = [
+                "i'm unable to", "i cannot", "i can't", "i am unable",
+                "i'm not able", "i am not able", "cannot assist",
+                "unable to assist", "cannot help", "sorry, but"
+            ]
+            content_lower = content.lower()
+            if any(pattern in content_lower for pattern in refusal_patterns):
+                print(f"[RESEARCH] ⚠️ LLM refused request, using scroll to find alternative")
+                return {"action": "scroll", "args": {"amount": 500}}
+            
             if content.startswith("```"):
                 lines = content.split("\n")
                 content = "\n".join(lines[1:-1])
@@ -777,21 +890,26 @@ Data collected (summary):
             end = content.rfind("}")
             if start != -1 and end != -1:
                 content = content[start:end+1]
+            else:
+                # No JSON found at all, use scroll
+                print("[RESEARCH] ⚠️ No JSON in response, using scroll")
+                return {"action": "scroll", "args": {"amount": 500}}
             
             data = json.loads(content)
             
-            # Validate action
-            if not data.get("action"):
-                # Default to text extraction with auto-scroll
-                return {
-                    "action": "extract_visible_text",
-                    "args": {"max_chars": 12000, "auto_scroll": True}
-                }
+            # Validate action - must be valid type
+            action = data.get("action", "")
+            valid_actions = ["goto", "click", "back", "extract_visible_text", "scroll", "done"]
+            
+            if action not in valid_actions:
+                print(f"[RESEARCH] ⚠️ Invalid action '{action}', using scroll fallback")
+                return {"action": "scroll", "args": {"amount": 500}}
                 
             return data
-        except json.JSONDecodeError:
-            # On parse failure, extract instead of quitting
-            return {"action": "extract_visible_text", "args": {"max_chars": 12000, "auto_scroll": True}}
+        except json.JSONDecodeError as e:
+            # On parse failure, use scroll (back causes blank page loops)
+            print(f"[RESEARCH] ⚠️ JSON parse failed: {e}. Using scroll fallback.")
+            return {"action": "scroll", "args": {"amount": 500}}
 
 
 def research_agent_node(state: AgentState) -> AgentState:

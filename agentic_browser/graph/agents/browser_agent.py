@@ -71,6 +71,7 @@ CRITICAL RULES:
 3. If you get a 404, move to the next site - don't retry
 4. After 3-5 actions, call "done" with what you accomplished
 5. For clicking links, ALWAYS use text= prefix!
+6. SKIP SPONSORED/AD LINKS! Never click links containing "Sponsored", "Ad", "Advertisement", or marked as ads
 
 Respond with JSON:
 {
@@ -118,6 +119,24 @@ Respond with JSON:
         # Build context from current page state
         page_state = self._get_page_state()
         current_url = page_state.get('current_url', '') or page_state.get('url', 'about:blank')
+
+        # === AUTO-NAVIGATION FIX ===
+        # If we're on about:blank or empty page, FORCE navigation to DuckDuckGo
+        # This prevents agents from extracting empty pages and getting stuck
+        if current_url == 'about:blank' or not current_url or current_url.startswith('about:'):
+            # Build search query from goal
+            goal = state['goal']
+            search_query = goal.replace(' ', '+')[:100]
+            search_url = f"https://duckduckgo.com/?q={search_query}"
+            
+            print(f"[BROWSER] 🚀 AUTO-NAVIGATING: Browser on blank page, opening DuckDuckGo")
+            self._browser_tools.execute("goto", {"url": search_url})
+            
+            return self._update_state(
+                state,
+                messages=[AIMessage(content=f"Auto-navigating to search: {search_url}")],
+                visited_url=search_url,
+            )
 
         # Get step count - NOTE: state uses 'step_count' not 'current_step'
         step_count = state.get('step_count', 0)
@@ -225,10 +244,37 @@ Respond with JSON:
 - Example: {"action": "download_image", "args": {}}
 """
 
+        # === ROOT CAUSE FIX: Show LLM what it already tried ===
+        # Without this, LLM doesn't know it's repeating actions
+        recent_actions = state.get("browser_recent_actions", [])
+        if recent_actions:
+            # Parse action keys back to readable format
+            action_history = []
+            for action_key in recent_actions[-5:]:  # Last 5 actions
+                try:
+                    action_name, args_json = action_key.split(":", 1)
+                    action_history.append(f"  - {action_name}: {args_json[:60]}")
+                except ValueError:
+                    action_history.append(f"  - {action_key[:60]}")
+            actions_str = "\n".join(action_history)
+            action_hint = f"""
+⚠️ PREVIOUS ACTIONS ON THIS SESSION (DO NOT REPEAT!):
+{actions_str}
+
+You MUST choose a DIFFERENT action. If previous actions didn't work:
+- Try a different selector with text= prefix
+- Navigate to a different URL
+- Use 'back' to return to search results
+- Use 'done' if you've gathered enough information
+"""
+        else:
+            action_hint = ""
+
         task_context = f"""
 Current URL: {current_url}
 Page Title: {page_state.get('page_title', '') or page_state.get('title', '')}
 {image_download_hint}
+{action_hint}
 Visible Text (truncated):
 {page_state.get('visible_text', '')[:800]}
 
@@ -291,44 +337,46 @@ CRITICAL VISION RULES:
             args = action_data.get("args", {})
             logger.debug(f"Browser agent action: {action} with args: {args}")
             logger.debug(f"Action: {action}, Args: {args}")
+            print(f"[BROWSER] Action: {action}, Args: {json.dumps(args)[:80]}")
 
-            # === LOOP DETECTION ===
-            # Check if we're repeating the same action or stuck in a goto loop
-            action_key = f"{action}:{json.dumps(args, sort_keys=True)}"
+            # === NAVIGATION-BASED LOOP DETECTION ===
+            # Instead of comparing URLs (which fails due to params/fragments),
+            # track actions and only reset after a SUCCESSFUL navigation action
             recent_actions = list(state.get("browser_recent_actions", []))
+            
+            action_key = f"{action}:{json.dumps(args, sort_keys=True)}"
 
             # Count how many times this exact action was done recently
             repeat_count = sum(1 for a in recent_actions[-5:] if a == action_key)
+            
+            # Also count total actions without navigation
+            actions_without_nav = state.get("_actions_without_nav", 0)
 
+            # === LOOP DETECTION AT 3X - FORCE BACK ===
+            if repeat_count >= 2:
+                print(f"[BROWSER] ⚠️ Action repeated {repeat_count + 1}x - forcing BACK to break loop")
+                action_data = {"action": "back", "args": {}}
+                action = "back"
+                args = {}
+                # Clear recent actions since we're forcing navigation
+                recent_actions = []
+            
             # Detect: repeating goto to URL we're already on
-            if action == "goto" and args.get("url"):
+            elif action == "goto" and args.get("url"):
                 goto_url = args.get("url", "").split("?")[0].rstrip("/")
                 current_base = current_url.split("?")[0].rstrip("/")
-                if goto_url == current_base or repeat_count >= 1:
-                    logger.warning(f"Loop detected: already on {current_url}, forcing download_image")
-                    print("[BROWSER] ⚠️ Loop detected - already on this URL or repeated action!")
-
-                    # If it's an images page and goal involves downloading, force download_image
-                    goal_lower = state['goal'].lower()
-                    if is_images_page and any(w in goal_lower for w in ['download', 'save', 'get image', 'get picture', 'find picture', 'find image']):
-                        print("[BROWSER] 🔄 Auto-executing download_image to break loop")
-                        action_data = {"action": "download_image", "args": {}}
-                        action = "download_image"
-                        args = {}
-
-            # If repeated 3+ times, force a scroll or download
-            if repeat_count >= 2:
-                print(f"[BROWSER] ⚠️ Action repeated {repeat_count + 1}x - breaking loop")
-                if is_images_page:
-                    action_data = {"action": "download_image", "args": {}}
-                    action = "download_image"
+                if goto_url == current_base:
+                    print("[BROWSER] ⚠️ Loop detected - already on this URL! Forcing BACK")
+                    action_data = {"action": "back", "args": {}}
+                    action = "back"
                     args = {}
-                else:
-                    action_data = {"action": "scroll", "args": {"amount": 500}}
-                    action = "scroll"
-                    args = {"amount": 500}
+                    recent_actions = []
 
-            # Track this action for loop detection (store in state)
+            # Warn if too many actions without navigation
+            if actions_without_nav >= 6:
+                print(f"[BROWSER] ⚠️ {actions_without_nav} actions without navigating away!")
+            
+            # Track this action
             recent_actions.append(action_key)
             if len(recent_actions) > 10:
                 recent_actions = recent_actions[-10:]
@@ -460,6 +508,9 @@ CRITICAL VISION RULES:
             # Persist recent actions for loop detection
             new_state["browser_recent_actions"] = recent_actions
 
+            # Persist URL tracking for page-scoped loop detection
+            new_state["_browser_last_url"] = current_url
+
             # Persist URL-change detection state
             new_state["browser_failed_nav_clicks"] = failed_nav_count
             new_state["browser_same_page_actions"] = same_page_actions
@@ -501,6 +552,18 @@ CRITICAL VISION RULES:
         try:
             # Extract JSON from response
             content = response.strip()
+            
+            # Detect LLM refusals before trying JSON parse
+            refusal_patterns = [
+                "i'm unable to", "i cannot", "i can't", "i am unable",
+                "i'm not able", "i am not able", "cannot assist",
+                "unable to assist", "cannot help", "sorry, but"
+            ]
+            content_lower = content.lower()
+            if any(pattern in content_lower for pattern in refusal_patterns):
+                print(f"[BROWSER] ⚠️ LLM refused request, using scroll to find alternative")
+                return {"action": "scroll", "args": {"amount": 500}}
+            
             if content.startswith("```"):
                 lines = content.split("\n")
                 content = "\n".join(lines[1:-1])
@@ -509,21 +572,27 @@ CRITICAL VISION RULES:
             end = content.rfind("}")
             if start != -1 and end != -1:
                 content = content[start:end+1]
+            else:
+                # No JSON found at all, use scroll
+                print("[BROWSER] ⚠️ No JSON in response, using scroll")
+                return {"action": "scroll", "args": {"amount": 500}}
 
             data = json.loads(content)
 
-            # Validate action
-            if not data.get("action"):
-                # Default to text extraction instead of done
-                return {
-                    "action": "extract_visible_text",
-                    "args": {"max_chars": 5000}
-                }
+            # Validate action - must have valid action type
+            action = data.get("action", "")
+            valid_actions = ["goto", "click", "type", "press", "scroll", "extract_visible_text", "download_image", "done", "back"]
+            
+            if action not in valid_actions:
+                # Invalid action - log and return scroll to break potential loops
+                print(f"[BROWSER] ⚠️ Invalid action '{action}' parsed, using scroll fallback")
+                return {"action": "scroll", "args": {"amount": 500}}
 
             return data
-        except json.JSONDecodeError:
-            # On parse failure, extract instead of quitting
-            return {"action": "extract_visible_text", "args": {"max_chars": 5000}}
+        except json.JSONDecodeError as e:
+            # On parse failure, log the issue and use scroll (not extract which causes loops!)
+            print(f"[BROWSER] ⚠️ JSON parse failed: {e}. Using scroll fallback.")
+            return {"action": "scroll", "args": {"amount": 500}}
 
     def _execute_action(self, action_data: dict, state: dict = None) -> ToolResult:
         """Execute a browser action with auto-fix for common selector issues."""

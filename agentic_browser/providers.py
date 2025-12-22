@@ -15,6 +15,7 @@ class Provider(str, Enum):
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     GOOGLE = "google"
+    OPENROUTER = "openrouter"
 
 
 # Default endpoints for each provider
@@ -23,6 +24,7 @@ PROVIDER_ENDPOINTS = {
     Provider.OPENAI: "https://api.openai.com/v1",
     Provider.ANTHROPIC: "https://api.anthropic.com/v1",
     Provider.GOOGLE: "https://generativelanguage.googleapis.com/v1beta",
+    Provider.OPENROUTER: "https://openrouter.ai/api/v1",
 }
 
 # Default models for each provider
@@ -31,6 +33,7 @@ PROVIDER_DEFAULT_MODELS = {
     Provider.OPENAI: "gpt-4o-mini",
     Provider.ANTHROPIC: "claude-3-haiku-20240307",
     Provider.GOOGLE: "gemini-1.5-flash",
+    Provider.OPENROUTER: "openai/gpt-4o-mini",
 }
 
 # Suggested models for each provider
@@ -59,6 +62,16 @@ PROVIDER_MODEL_SUGGESTIONS = {
         "gemini-1.5-pro",
         "gemini-1.0-pro",
     ],
+    Provider.OPENROUTER: [
+        "openai/gpt-4o-mini",
+        "openai/gpt-4o",
+        "anthropic/claude-3.5-sonnet",
+        "anthropic/claude-3-haiku",
+        "google/gemini-pro-1.5",
+        "meta-llama/llama-3.1-70b-instruct",
+        "mistralai/mistral-large",
+        "deepseek/deepseek-chat",
+    ],
 }
 
 # Provider display names
@@ -67,6 +80,7 @@ PROVIDER_DISPLAY_NAMES = {
     Provider.OPENAI: "OpenAI",
     Provider.ANTHROPIC: "Anthropic",
     Provider.GOOGLE: "Google AI",
+    Provider.OPENROUTER: "OpenRouter",
 }
 
 # Whether provider requires API key
@@ -75,6 +89,7 @@ PROVIDER_REQUIRES_API_KEY = {
     Provider.OPENAI: True,
     Provider.ANTHROPIC: True,
     Provider.GOOGLE: True,
+    Provider.OPENROUTER: True,
 }
 
 

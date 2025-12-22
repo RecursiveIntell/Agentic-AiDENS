@@ -2,12 +2,15 @@
 Main LangGraph construction for multi-agent system.
 
 Wires together supervisor and specialized agents into a StateGraph.
+Supports live steering via input_queue.
 """
 
-from typing import Any
+import queue
+from typing import Any, Optional
 
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.messages import SystemMessage
 
 from .state import AgentState, create_initial_state
 from .supervisor import supervisor_node, route_to_agent
@@ -157,6 +160,12 @@ class MultiAgentRunner:
         self.os_tools = os_tools
         self.enable_checkpointing = enable_checkpointing
         
+        # Thread-safe input queue for live steering
+        self.input_queue: queue.Queue = queue.Queue()
+        
+        # Current node for graph visualization
+        self._current_node: str = "planner"
+        
         # Initialize persistence
         from .memory import SessionStore
         self.session_store = SessionStore() if enable_checkpointing else None
@@ -179,7 +188,6 @@ class MultiAgentRunner:
         # Build graph
         # CRITICAL: MemorySaver causes hangs - checkpoints after every super-step
         # causing exponential memory growth. Disable by default.
-        # See: https://langchain.com/ docs on checkpoint overhead
         checkpointer = None  # Disabled - was causing step 13+ hangs
         self.graph = build_agent_graph(checkpointer)
     
@@ -274,9 +282,23 @@ class MultiAgentRunner:
                     "recursion_limit": 50,  # Allow more agent interactions
                 },
             ):
+                # LIVE STEERING: Check input queue before processing
+                steering_messages = self._process_steering_queue()
+                
                 # PERSISTENCE: Update session store (THROTTLED for performance)
-                if self.session_store:
-                    for node_name, node_state in event.items():
+                for node_name, node_state in event.items():
+                    # Update current node for graph visualization
+                    self._current_node = node_name
+                    
+                    # Inject steering messages if present
+                    if steering_messages and "messages" in node_state:
+                        for msg in steering_messages:
+                            node_state["messages"].append(msg)
+                    
+                    # Add current_node to state for GUI
+                    node_state["current_node"] = node_name
+                    
+                    if self.session_store:
                         # THROTTLE: Only persist every 3 steps or on completion
                         step_count = node_state.get("step_count", 0)
                         is_finished = node_state.get("task_complete", False)
@@ -291,7 +313,7 @@ class MultiAgentRunner:
                             step_num = node_state.get("step_count", 0)
                             
                             # VECTOR DB: Persist message to separate table
-                            role = type(last_msg).__name__.replace("Message", "").lower()  # SystemMessage -> system
+                            role = type(last_msg).__name__.replace("Message", "").lower()
                             content = str(last_msg.content) if hasattr(last_msg, 'content') else str(last_msg)
                             try:
                                 self.session_store.add_message(self.session_id, role, content, step_num)
@@ -307,11 +329,10 @@ class MultiAgentRunner:
                                         agent_name,
                                         tc.get("name"),
                                         tc.get("args"),
-                                        None # Result comes later
+                                        None
                                     )
                             else:
                                 content = str(last_msg.content)
-                                # Log simplified thought
                                 self.session_store.add_step(
                                     self.session_id,
                                     step_num,
@@ -320,8 +341,6 @@ class MultiAgentRunner:
                                     {"text": content[:200]},
                                     None
                                 )
-
-
                 
                 yield event
             
@@ -354,6 +373,36 @@ class MultiAgentRunner:
                 }
             else:
                 raise
+    
+    def _process_steering_queue(self) -> list:
+        """Process any pending steering messages from the input queue.
+        
+        Returns:
+            List of SystemMessage objects to inject into agent state
+        """
+        messages = []
+        
+        while not self.input_queue.empty():
+            try:
+                item = self.input_queue.get_nowait()
+                if item.get("type") == "abort":
+                    # Abort requested - return special message
+                    return [SystemMessage(content="[ABORT] User requested task cancellation. Wrap up immediately.")]
+                elif item.get("type") == "steering":
+                    content = item.get("content", "")
+                    if content:
+                        messages.append(SystemMessage(
+                            content=f"[USER INTERVENTION - HIGH PRIORITY] {content}"
+                        ))
+            except Exception:
+                break
+        
+        return messages
+    
+    @property
+    def current_node(self) -> str:
+        """Get current active node name for graph visualization."""
+        return self._current_node
     
     def cleanup(self) -> None:
         """Unregister tools from registry."""

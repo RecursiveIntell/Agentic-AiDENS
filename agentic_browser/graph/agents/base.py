@@ -276,11 +276,17 @@ class BaseAgent(ABC):
                 try:
                     response = self.llm.invoke(messages)
                     
-                    # Handle empty responses
-                    if response is None or (hasattr(response, 'content') and not response.content):
+                    # Debug: show first 200 chars of response
+                    content = getattr(response, 'content', None)
+                    if content:
+                        print(f"[DEBUG LLM] Response: {content[:200]}...")
+                    
+                    # Handle empty responses - check for None, empty string, or whitespace-only
+                    if response is None or not content or not content.strip():
                         notify_gui("Model returned empty response, using fallback", is_error=True)
-                        print("[WARN] LLM returned empty response, providing fallback")
-                        return AIMessage(content='{"action": "done", "args": {"summary": "Unable to process - model returned empty response"}}')
+                        print("[WARN] LLM returned empty/whitespace response, providing fallback")
+                        # Return scroll for research, done is counterproductive
+                        return AIMessage(content='{"action": "scroll", "args": {"amount": 500}}')
                     
                     return response
 
@@ -400,10 +406,21 @@ class BaseAgent(ABC):
         
         try:
             if browser_tools and hasattr(browser_tools, 'page') and browser_tools.page:
-                screenshot_bytes = browser_tools.page.screenshot(full_page=False)
+                page = browser_tools.page
+                # Check if page is still connected before screenshot
+                if hasattr(page, 'is_closed') and callable(page.is_closed):
+                    if page.is_closed():
+                        return None
+                screenshot_bytes = page.screenshot(full_page=False)
                 return base64.b64encode(screenshot_bytes).decode('utf-8')
         except Exception as e:
-            print(f"[VISION] Screenshot capture failed: {e}")
+            # Handle specific Playwright errors gracefully
+            error_str = str(e).lower()
+            if 'closed' in error_str or 'target' in error_str:
+                # Browser/page was closed - this is expected during cleanup
+                pass
+            else:
+                print(f"[VISION] Screenshot capture failed: {e}")
         
         return None
     

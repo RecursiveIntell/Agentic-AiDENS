@@ -233,30 +233,20 @@ The required format is:
         self.model = config.model
         self.api_key = config.api_key
         
-        # If provider config supplied, use native adapter
+        # Native adapter support removed - use LangChain clients via graph/agents/base.py
         self._adapter = None
-        if provider_config:
-            try:
-                from .adapters import create_adapter, Message
-                from .providers import Provider
-                self._adapter = create_adapter(provider_config.provider, provider_config)
-                self._Message = Message
-            except ImportError:
-                pass  # Fall back to direct HTTP
         
-        # Build headers (for fallback HTTP mode)
+        # Build headers (for direct HTTP mode)
         self.headers = {"Content-Type": "application/json"}
         if self.api_key:
             self.headers["Authorization"] = f"Bearer {self.api_key}"
         
-        # HTTP client (for fallback mode)
+        # HTTP client
         self.client = httpx.Client(timeout=60.0)
     
     def close(self) -> None:
         """Close the HTTP client."""
         self.client.close()
-        if self._adapter:
-            self._adapter.close()
     
     def _build_messages(
         self, 

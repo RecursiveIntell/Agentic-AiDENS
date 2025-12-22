@@ -9,6 +9,7 @@ A Linux-first **multi-agent system** that controls your **web browser**, **local
     *   **OpenAI** (GPT-4o, o1-preview, o3-mini)
     *   **Anthropic** (Claude 3.5 Sonnet, Claude 3 Opus)
     *   **Google** (Gemini 1.5 Pro/Flash, Gemini 2.0)
+    *   **OpenRouter** (Access to 100+ models via unified API)
     *   **LM Studio** (Local LLMs - Llama 3, Qwen 2.5)
 *   **Intelligent Research**: Unique URL tracking, CAPTCHA detection, and automatic content extraction with minimum source requirements.
 *   **Safety Guardrails**: Policy engine with risk-based permissions, typed tool schemas, and user approval for dangerous operations.
@@ -216,6 +217,17 @@ Actions are classified by risk level:
 | Service control fails | May need sudo (shown as command to run) |
 
 ## 📈 Recent Updates
+
+### GUI Refactoring & Agent Robustness (v0.7.2)
+- **New Mission Control GUI** (`frontier_ui.py`): Complete rewrite of the GUI with dark neural theme, multi-panel layout (Neural Stream, State Tree, Browser Viewport), and proper signal-based IPC via `agent_thread.py`.
+- **Click Timeout Fix**: Increased from 1500ms → 5000ms to handle slow-loading pages (LinkedIn, etc.) without false failures.
+- **LLM Refusal Detection**: Both browser and research agents now detect refusal messages ("I'm unable to assist...") and fallback to scroll instead of crashing.
+- **Loop Prevention Overhaul**: 
+    - Parse failure fallback changed from `done` → `scroll` to prevent premature completion loops.
+    - Added action validation (whitelisted actions only) before execution.
+    - Refusal/no-JSON detection before attempting parse.
+- **Content Depth Fix**: Research report auto-completion now includes 2000 chars per source (was 500) for actual deal/data details instead of summaries.
+- **OpenRouter Support**: Added OpenRouter as a new API provider option.
 
 ### Code Quality & Best Practices (v0.7.1)
 - **Type Safety**: New `types.py` module with typed dataclasses (`ActionData`, `TokenUsage`, `PageState`) for better IDE support

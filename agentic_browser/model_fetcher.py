@@ -44,6 +44,8 @@ def fetch_models(
         return _fetch_anthropic_models(endpoint, api_key, timeout)
     elif provider == Provider.GOOGLE:
         return _fetch_google_models(endpoint, api_key, timeout)
+    elif provider == Provider.OPENROUTER:
+        return _fetch_openrouter_models(endpoint, api_key, timeout)
     
     return []
 
@@ -134,3 +136,30 @@ def _fetch_google_models(endpoint: str, api_key: Optional[str], timeout: float) 
                     models.append(model_id)
         
         return sorted(models)
+
+
+def _fetch_openrouter_models(endpoint: str, api_key: Optional[str], timeout: float) -> list[str]:
+    """Fetch models from OpenRouter API.
+    
+    OpenRouter uses an OpenAI-compatible API with Bearer token auth.
+    """
+    if not api_key:
+        raise ValueError("OpenRouter requires an API key")
+    
+    url = f"{endpoint}/models"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    
+    with httpx.Client(timeout=timeout) as client:
+        response = client.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        
+        models = []
+        for model in data.get("data", []):
+            model_id = model.get("id", "")
+            # Include all chat/instruct capable models
+            if model_id:
+                models.append(model_id)
+        
+        return sorted(models)
+

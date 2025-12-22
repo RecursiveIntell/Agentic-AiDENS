@@ -254,7 +254,7 @@ class BrowserTools:
                     if locator.count() > 0:
                         # Strategy 1: Standard click
                         try:
-                            locator.first.click(timeout=1500)
+                            locator.first.click(timeout=5000)
                             self._wait_after_click()
                             return ToolResult(
                                 success=True,
@@ -265,7 +265,7 @@ class BrowserTools:
                             # Strategy 2: Force click
                             print(f"Standard click failed: {e}. Retrying with force=True")
                             try:
-                                locator.first.click(timeout=1500, force=True)
+                                locator.first.click(timeout=5000, force=True)
                                 self._wait_after_click()
                                 return ToolResult(
                                     success=True,

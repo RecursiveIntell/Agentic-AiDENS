@@ -1,7 +1,9 @@
 """
-GUI package for Agentic Browser.
+GUI package for Agentic AiDEN.
+
+Provides the Mission Control interface.
 """
 
-from .main_window import MainWindow, run_gui
+from .frontier_ui import MissionControlWindow, main as run_gui
 
-__all__ = ["MainWindow", "run_gui"]
+__all__ = ["MissionControlWindow", "run_gui"]

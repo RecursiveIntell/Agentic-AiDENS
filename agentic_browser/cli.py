@@ -1,5 +1,5 @@
 """
-CLI for Agentic Browser.
+CLI for Agentic AiDEN.
 
 Provides the command-line interface using argparse.
 """
@@ -17,24 +17,27 @@ from .config import AgentConfig, DEFAULTS
 def create_parser() -> argparse.ArgumentParser:
     """Create the argument parser."""
     parser = argparse.ArgumentParser(
-        prog="agentic-browser",
-        description="A Linux-first agentic browser runner that controls Chromium via Playwright.",
+        prog="agentic",
+        description="Agentic AiDEN - A production-grade AI agent that controls your browser and OS.",
         epilog="""
 Examples:
   # Get the title of a webpage
-  agentic-browser run "Open example.com and tell me the title"
+  agentic run "Open example.com and tell me the title"
   
   # Search for something and navigate to results
-  agentic-browser run "Search the web for Playwright and open the docs"
+  agentic run "Search the web for Playwright and open the docs"
   
   # Use a specific LLM endpoint
-  agentic-browser run "Check my email" --model-endpoint http://localhost:1234/v1 --model llama2
+  agentic run "Check my email" --model-endpoint http://localhost:1234/v1 --model llama2
   
   # Run in headless mode with auto-approval
-  agentic-browser run "Scrape product prices from amazon.com" --headless --auto-approve
+  agentic run "Scrape product prices from amazon.com" --headless --auto-approve
   
   # Use a fresh browser profile
-  agentic-browser run "Log into my account" --fresh-profile
+  agentic run "Log into my account" --fresh-profile
+  
+  # Launch Mission Control GUI
+  agentic gui
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -42,7 +45,7 @@ Examples:
     parser.add_argument(
         "--version",
         action="version",
-        version=f"agentic-browser {__version__}",
+        version=f"Agentic AiDEN {__version__}",
     )
     
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -662,7 +665,7 @@ def memory_command(args: argparse.Namespace) -> int:
     else:
         # No flag - show help
         console.print("Use --show, --bootstrap, --edit, or --clear")
-        console.print("Run 'agentic-browser memory --help' for details.")
+        console.print("Run 'agentic memory --help' for details.")
         return 0
 
 

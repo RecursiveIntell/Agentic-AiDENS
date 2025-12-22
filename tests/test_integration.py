@@ -57,9 +57,9 @@ class TestImports:
     
     def test_gui_imports(self):
         """Verify GUI module imports (without launching)."""
-        from agentic_browser.gui.main_window import MainWindow
+        from agentic_browser.gui.frontier_ui import MissionControlWindow
         from agentic_browser.gui.cost_dialog import CostDialog
-        assert MainWindow is not None
+        assert MissionControlWindow is not None
         assert CostDialog is not None
 
 
@@ -192,20 +192,21 @@ class TestSupervisorRouting:
 class TestGUIComponents:
     """Test GUI component initialization (without display)."""
     
-    def test_main_window_has_cost_label(self):
-        """Verify MainWindow defines cost_label."""
-        from agentic_browser.gui.main_window import MainWindow
+    def test_mission_control_has_setup_ui(self):
+        """Verify MissionControlWindow defines _setup_ui."""
+        from agentic_browser.gui.frontier_ui import MissionControlWindow
         
         # Check that the class has the _setup_ui method
-        assert hasattr(MainWindow, "_setup_ui")
+        assert hasattr(MissionControlWindow, "_setup_ui")
     
-    def test_main_window_has_format_token_count(self):
-        """Verify MainWindow has _format_token_count method."""
-        from agentic_browser.gui.main_window import MainWindow
+    def test_mission_control_has_neural_stream(self):
+        """Verify MissionControlWindow has NeuralStream component."""
+        from agentic_browser.gui.frontier_ui import NeuralStream
         
-        assert hasattr(MainWindow, "_format_token_count")
+        assert NeuralStream is not None
 
 
 # Run with: pytest tests/test_integration.py -v --tb=short
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
