@@ -144,13 +144,11 @@ When completing, synthesize ALL gathered data into a useful report:
                 fallback_model = None
                 
                 if "claude" in (self.config.model or ""):
-                    # Fallback chain for Anthropic
-                    if "sonnet-20241022" in self.config.model:
-                        fallback_model = "claude-3-5-sonnet-20240620"
-                    elif "sonnet" in self.config.model:
-                        fallback_model = "claude-3-haiku-20240307"
+                    # Fallback chain for Anthropic (updated Oct 2024)
+                    if "sonnet" in self.config.model:
+                        fallback_model = "claude-3-5-haiku-20241022"
                     else:
-                        fallback_model = "claude-3-haiku-20240307"
+                        fallback_model = "claude-3-5-haiku-20241022"
                 elif "gpt" in (self.config.model or ""):
                     # Fallback for OpenAI
                     fallback_model = "gpt-4o-mini"
