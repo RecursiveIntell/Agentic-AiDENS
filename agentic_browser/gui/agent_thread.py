@@ -155,13 +155,16 @@ class AgentThread(QThread):
             
             # Stream execution
             final_state = None
-            for state_update in self._runner.stream(self.goal, self.max_steps):
+            for event in self._runner.stream(self.goal, self.max_steps):
                 if not self.running:
                     self._handle_abort()
                     break
                 
-                final_state = state_update
-                self._process_state_update(state_update)
+                # Stream yields {node_name: node_state} dicts - extract node_state
+                for node_name, node_state in event.items():
+                    if isinstance(node_state, dict):
+                        final_state = node_state
+                        self._process_state_update(node_state)
                 
                 # Capture screenshot from within this thread (where Playwright lives)
                 self._try_capture_screenshot()
