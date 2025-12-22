@@ -1025,18 +1025,18 @@ def doctor_command(args: argparse.Namespace) -> int:
     console.print("[bold]11. Knowledge Base[/bold]")
     
     try:
-        from .graph.knowledge_base import StrategyBank
+        from .graph.knowledge_base import KnowledgeBase
         
         # Just check it can be imported and has required methods
-        required_methods = ["add_strategy", "search", "get_all"]
-        missing_methods = [m for m in required_methods if not hasattr(StrategyBank, m)]
+        required_methods = ["save_strategy", "search_strategies", "tiered_recall_async"]
+        missing_methods = [m for m in required_methods if not hasattr(KnowledgeBase, m)]
         
         if missing_methods:
             results.append(("Knowledge Base", "yellow", f"⚠️ Missing methods: {missing_methods}", None))
             console.print(f"  [yellow]⚠️[/yellow] Missing methods: {missing_methods}")
         else:
             results.append(("Knowledge Base", "green", "✅ Available", None))
-            console.print(f"  [green]✅[/green] StrategyBank available")
+            console.print(f"  [green]✅[/green] KnowledgeBase available")
             
     except Exception as e:
         results.append(("Knowledge Base", "yellow", f"⚠️ Not available: {e}", None))
