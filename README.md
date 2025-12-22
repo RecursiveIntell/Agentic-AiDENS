@@ -70,7 +70,7 @@ sudo dnf install ImageMagick  # or apt install imagemagick
 
 ### GUI Mode (Recommended)
 ```bash
-agentic-browser gui
+agentic gui
 ```
 
 ### CLI Mode
