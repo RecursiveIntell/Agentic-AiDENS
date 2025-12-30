@@ -330,7 +330,6 @@ When completing, synthesize ALL gathered data into a useful report:
                     "current_domain": "done",
                     "task_complete": True,
                     "final_answer": self._synthesize_report(state),
-                    "final_answer": self._synthesize_report(state),
                     "messages": [AIMessage(content=response.content)],
                     "token_usage": token_usage,
                 }
