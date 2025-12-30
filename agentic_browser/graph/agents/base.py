@@ -526,6 +526,18 @@ class BaseAgent(ABC):
             
         # Strip image_url content from older messages to reduce memory
         # Only keep text from messages beyond the last 5
+        def _truncate_message(original_msg: BaseMessage, truncated_content: str) -> BaseMessage:
+            """Create a new message instance with truncated content."""
+            if isinstance(original_msg, HumanMessage):
+                return HumanMessage(content=truncated_content)
+            if isinstance(original_msg, AIMessage):
+                return AIMessage(content=truncated_content)
+
+            message_type = getattr(original_msg, "type", "")
+            if message_type == "ai":
+                return AIMessage(content=truncated_content)
+            return HumanMessage(content=truncated_content)
+
         pruned_msgs = []
         for i, msg in enumerate(all_msgs):
             is_recent = i >= len(all_msgs) - 5
@@ -554,16 +566,7 @@ class BaseAgent(ABC):
                     content_str = content_str[:500] + "...[truncated]"
                 
                 # Reconstruct as simplified text-only message
-                if isinstance(msg, HumanMessage):
-                    pruned_msgs.append(HumanMessage(content=content_str))
-                elif isinstance(msg, AIMessage):
-                    pruned_msgs.append(AIMessage(content=content_str))
-                else:
-                    # System/Tool messages - keep as is but with truncated content if possible
-                    # Or just forcing a generic message type might be safer, but let's try to preserve type if it has content
-                    if hasattr(msg, 'content'):
-                        msg.content = content_str
-                    pruned_msgs.append(msg)
+                pruned_msgs.append(_truncate_message(msg, content_str))
         all_msgs = pruned_msgs
 
         

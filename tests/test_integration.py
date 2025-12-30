@@ -149,6 +149,34 @@ class TestAgentSignatures:
         # Just verify method exists and is callable
         assert callable(BaseAgent._build_messages)
 
+    def test_build_messages_preserves_state_contents(self):
+        """Verify _build_messages does not mutate state message contents."""
+        from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
+        from agentic_browser.config import AgentConfig
+        from agentic_browser.graph.agents.planner_agent import PlannerAgentNode
+        from agentic_browser.graph.state import create_initial_state
+
+        config = AgentConfig(goal="Test goal")
+        agent = PlannerAgentNode(config)
+
+        state = create_initial_state(goal="Test goal")
+        state["messages"] = [
+            SystemMessage(content="S" * 600),
+            HumanMessage(content="H" * 600),
+            AIMessage(content="A" * 600),
+            HumanMessage(content="short human"),
+            AIMessage(content="short ai"),
+            HumanMessage(content="short human 2"),
+            AIMessage(content="short ai 2"),
+            HumanMessage(content="short human 3"),
+        ]
+        original_contents = [msg.content for msg in state["messages"]]
+
+        agent._build_messages(state)
+
+        assert [msg.content for msg in state["messages"]] == original_contents
+
 
 class TestCostCalculation:
     """Test cost calculation functionality."""
@@ -209,4 +237,3 @@ class TestGUIComponents:
 # Run with: pytest tests/test_integration.py -v --tb=short
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-
