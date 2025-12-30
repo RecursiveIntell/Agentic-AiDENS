@@ -115,12 +115,17 @@ class TestOSActionClassification:
     def test_os_write_file_home_medium_risk(self, classifier):
         """Test writing to home is medium risk."""
         import os
+        from pathlib import Path
         home = os.path.expanduser("~")
+        resolved_home = str(Path(home).expanduser().resolve())
         risk = classifier.classify_action(
             "os_write_file",
             {"path": f"{home}/test.txt", "content": "test"},
         )
-        assert risk == RiskLevel.MEDIUM
+        expected = RiskLevel.MEDIUM
+        if any(resolved_home.startswith(path) for path in classifier.OS_HIGH_RISK_PATHS):
+            expected = RiskLevel.HIGH
+        assert risk == expected
     
     # os_read_file tests
     def test_os_read_file_ssh_key_medium_risk(self, classifier):
