@@ -290,6 +290,11 @@ class TestOSToolsRiskClassification:
         """Test sudo classified as high risk."""
         risk = tools.classify_risk("os_exec", {"cmd": "sudo apt update"})
         assert risk == "high"
+
+    def test_classify_argv_rm_rf_high(self, tools):
+        """Test argv rm -rf classified as high risk."""
+        risk = tools.classify_risk("os_exec", {"argv": ["rm", "-rf", "/"]})
+        assert risk == "high"
     
     def test_classify_mv_medium(self, tools):
         """Test mv classified as medium risk."""
