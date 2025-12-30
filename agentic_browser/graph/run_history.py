@@ -50,7 +50,8 @@ class RecallTool:
         if action == "search_runs":
             return self.search_runs(
                 args.get("query", ""),
-                args.get("limit", 5)
+                args.get("limit", 5),
+                args.get("success_only", True),
             )
         elif action == "get_run_details":
             return self.get_run_details(args.get("run_id", ""))
@@ -103,12 +104,11 @@ class RecallTool:
                 message=f"Error searching strategies: {str(e)}"
             )
 
-    def search_runs(self, query: str, limit: int = 5) -> ToolResult:
+    def search_runs(self, query: str, limit: int = 5, success_only: bool = True) -> ToolResult:
         """Search for past runs matching a query."""
         if not query:
             return ToolResult(success=False, message="Missing required argument: query")
-            
-        limit = args.get("limit", 5)
+
         # TODO: Implement success_only filtering in SQL in future, for now client-side
         
         try:
@@ -117,7 +117,7 @@ class RecallTool:
             # Filter and format
             results = []
             for s in sessions:
-                if args.get("success_only", True) and s.get("status") != "success":
+                if success_only and s.get("status") != "success":
                     continue
                     
                 results.append({
