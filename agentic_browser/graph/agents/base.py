@@ -287,6 +287,16 @@ class BaseAgent(ABC):
             Exception: If retry fails or unrelated error
         """
         import json
+
+        def get_fallback_action(summary: str) -> dict:
+            fallback_actions = {
+                "browser": {"action": "scroll", "args": {"amount": 500}},
+                "research": {"action": "scroll", "args": {"amount": 500}},
+            }
+            return fallback_actions.get(
+                self.AGENT_NAME,
+                {"action": "done", "args": {"summary": summary}},
+            )
         
         def notify_gui(status_msg: str, is_error: bool = False):
             try:
@@ -315,8 +325,10 @@ class BaseAgent(ABC):
                     if response is None or not content or not content.strip():
                         notify_gui("Model returned empty response, using fallback", is_error=True)
                         print("[WARN] LLM returned empty/whitespace response, providing fallback")
-                        # Return scroll for research, done is counterproductive
-                        return AIMessage(content='{"action": "scroll", "args": {"amount": 500}}')
+                        fallback_action = get_fallback_action(
+                            "Model returned empty response - try a different model",
+                        )
+                        return AIMessage(content=json.dumps(fallback_action))
                     
                     return response
 
