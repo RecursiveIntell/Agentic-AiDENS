@@ -326,7 +326,14 @@ def planner_agent_node(state: AgentState) -> AgentState:
         agent_config = tools.config
     else:
         from ...config import AgentConfig
-        agent_config = AgentConfig()
+        goal = state.get("goal", "")
+        agent_config = AgentConfig(goal=goal)
+        if not agent_config.model or not agent_config.model_endpoint:
+            agent_config = AgentConfig.from_cli_args(
+                goal=goal,
+                model=agent_config.model,
+                model_endpoint=agent_config.model_endpoint,
+            )
     
     agent = PlannerAgentNode(agent_config)
     
