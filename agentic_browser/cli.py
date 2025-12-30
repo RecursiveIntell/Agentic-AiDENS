@@ -431,21 +431,21 @@ def run_graph_command(args: argparse.Namespace, config: AgentConfig, console: Co
     signal.signal(signal.SIGTERM, handle_sigterm)
     signal.signal(signal.SIGINT, handle_sigterm)
     
+    final_answer = ""
+    final_state = {}
+
     try:
         # Stream execution for real-time output
         if not json_mode:
             console.print("[bold]Starting multi-agent execution...[/bold]")
             console.print()
         
-        final_answer = ""
-        final_state = {}
-        
         for event in runner.stream(config.goal, config.max_steps):
             # Display agent activity
             for node_name, state_update in event.items():
                 if json_mode:
                     # In JSON mode, we just collect state, no printing
-                     if state_update.get("task_complete"):
+                    if state_update.get("task_complete"):
                         final_state = state_update
                         final_answer = state_update.get("final_answer", "")
                 else:
@@ -487,8 +487,8 @@ def run_graph_command(args: argparse.Namespace, config: AgentConfig, console: Co
                     console.print(f"[red]Error: {error}[/red]")
         
         if json_mode:
-             import json
-             print(json.dumps({"success": False, "error": "Task ended without completion"}))
+            import json
+            print(json.dumps({"success": False, "error": "Task ended without completion"}))
         else:
             console.print("\n[yellow]Execution ended (no explicit completion)[/yellow]")
         return 1
@@ -503,35 +503,12 @@ def run_graph_command(args: argparse.Namespace, config: AgentConfig, console: Co
             
         console.print("\n[yellow]Interrupted by user[/yellow]")
         return 130
-
-
-def _run_retrospective_on_abort(state: dict, config: AgentConfig, console: Console):
-    """Run retrospective analysis when user aborts."""
-    try:
-        console.print("\n[bold yellow]⚠️  Run Aborted! Running Retrospective Learning...[/bold yellow]")
-        
-        from .graph.agents.retrospective_agent import RetrospectiveAgent
-        
-        # Inject aborted flag
-        state["was_aborted"] = True
-        
-        # Ensure minimal fields exist
-        if "messages" not in state:
-            state["messages"] = []
-            
-        agent = RetrospectiveAgent(config)
-        agent.execute(state)
-        
-        console.print("[green]✓ Retrospective captured.[/green]")
-    except Exception as e:
-        console.print(f"[dim]Failed to run retrospective: {e}[/dim]")
-        
     except Exception as e:
         error_msg = str(e).lower()
         
         # Try to run retrospective on failure
         if final_state and not final_state.get("retrospective_ran"):
-             # Inject the specific error into state
+            # Inject the specific error into state
             final_state["error"] = str(e)
             _run_retrospective_on_abort(final_state, config, console)
             
@@ -561,6 +538,28 @@ def _run_retrospective_on_abort(state: dict, config: AgentConfig, console: Conso
         # Close session store
         if hasattr(runner, 'session_store') and runner.session_store:
             runner.session_store.close()
+
+
+def _run_retrospective_on_abort(state: dict, config: AgentConfig, console: Console):
+    """Run retrospective analysis when user aborts."""
+    try:
+        console.print("\n[bold yellow]⚠️  Run Aborted! Running Retrospective Learning...[/bold yellow]")
+        
+        from .graph.agents.retrospective_agent import RetrospectiveAgent
+        
+        # Inject aborted flag
+        state["was_aborted"] = True
+        
+        # Ensure minimal fields exist
+        if "messages" not in state:
+            state["messages"] = []
+            
+        agent = RetrospectiveAgent(config)
+        agent.execute(state)
+        
+        console.print("[green]✓ Retrospective captured.[/green]")
+    except Exception as e:
+        console.print(f"[dim]Failed to run retrospective: {e}[/dim]")
 
 
 def gui_command() -> int:
