@@ -10,6 +10,7 @@ from agentic_browser.llm_client import (
     ActionResponse,
     LLMClient,
 )
+from agentic_browser.tool_schemas import ACTION_SCHEMAS
 from agentic_browser.utils import extract_json_from_response
 
 
@@ -164,6 +165,17 @@ class TestActionResponse:
         assert response.risk == "low"
         assert response.requires_approval is False
         assert response.final_answer is None
+
+    @pytest.mark.parametrize("action", sorted(ACTION_SCHEMAS.keys()))
+    def test_supported_action_schemas(self, action):
+        """Ensure all schema actions are accepted by ActionResponse."""
+        response = ActionResponse(
+            action=action,
+            args={},
+            rationale="test",
+            risk="low",
+        )
+        assert response.action == action
 
 
 class TestRetryLogic:

@@ -28,7 +28,7 @@ CRITICAL: You MUST respond with ONLY valid JSON, no markdown, no prose, no expla
 
 Your response must follow this exact schema:
 {
-  "action": "goto|click|type|press|scroll|wait_for|extract|extract_visible_text|screenshot|back|forward|done",
+  "action": "goto|click|type|press|scroll|wait_for|extract|extract_visible_text|screenshot|back|forward|done|os_exec|os_list_dir|os_read_file|os_write_file|os_move_file|os_copy_file|os_delete_file|download_file|download_image|memory_get_site|memory_save_site|memory_get_directory",
   "args": { ... },
   "rationale": "short reason for this action",
   "risk": "low|medium|high",
@@ -46,8 +46,24 @@ Action argument rules:
 - extract: { "selector": "...", "attribute": "innerText|href|value|..." }
 - extract_visible_text: { "max_chars": 8000 }
 - screenshot: { "label": "optional description" }
+- download_file: { "url": "https://...", "save_path": "/path/to/file" }
+- download_image: { "selector": "optional selector", "url": "optional direct url", "filename": "optional name" }
 - back/forward: {}
 - done: { "summary_style": "bullets|paragraph" }
+
+OS Action argument rules:
+- os_exec: { "cmd": "command string", "timeout_s": 30, "cwd": "/optional/path" }
+- os_list_dir: { "path": "/path/to/dir" }
+- os_read_file: { "path": "/path/to/file", "max_bytes": 10000 }
+- os_write_file: { "path": "/path/to/file", "content": "...", "mode": "overwrite|append" }
+- os_move_file: { "source": "/path/from", "destination": "/path/to" }
+- os_copy_file: { "source": "/path/from", "destination": "/path/to" }
+- os_delete_file: { "path": "/path/to/file" }
+
+Memory Action argument rules:
+- memory_get_site: { "domain": "example.com" }
+- memory_save_site: { "domain": "example.com", "data": { ... } }
+- memory_get_directory: { "name": "directory name" }
 
 CRITICAL WORKFLOW PATTERNS:
 
