@@ -237,6 +237,11 @@ class BaseAgent(ABC):
     def system_prompt(self) -> str:
         """Return the system prompt for this agent type."""
         pass
+
+    @abstractmethod
+    def _empty_response_fallback(self, error: str | None = None) -> dict:
+        """Return a safe fallback payload when the model response is empty."""
+        pass
     
     def safe_invoke(self, messages: list) -> AIMessage:
         """Invoke LLM with fallback handling for 404 errors and empty responses.
@@ -257,6 +262,20 @@ class BaseAgent(ABC):
             Exception: If retry fails or unrelated error
         """
         import json
+
+        def build_fallback_message(reason: str) -> AIMessage:
+            payload = self._empty_response_fallback(reason)
+            if isinstance(payload, str):
+                content = payload
+            else:
+                try:
+                    content = json.dumps(payload)
+                except TypeError:
+                    content = json.dumps({
+                        "action": "done",
+                        "args": {"summary": reason},
+                    })
+            return AIMessage(content=content)
         
         def notify_gui(status_msg: str, is_error: bool = False):
             try:
@@ -285,8 +304,7 @@ class BaseAgent(ABC):
                     if response is None or not content or not content.strip():
                         notify_gui("Model returned empty response, using fallback", is_error=True)
                         print("[WARN] LLM returned empty/whitespace response, providing fallback")
-                        # Return scroll for research, done is counterproductive
-                        return AIMessage(content='{"action": "scroll", "args": {"amount": 500}}')
+                        return build_fallback_message("Model returned empty response")
                     
                     return response
 
@@ -331,7 +349,7 @@ class BaseAgent(ABC):
             if any(p in error_msg for p in empty_patterns):
                 notify_gui(f"Empty/invalid response: {str(e)[:50]}...", is_error=True)
                 print(f"[WARN] Empty/invalid response error: {e}")
-                return AIMessage(content='{"action": "done", "args": {"summary": "Model returned empty response - try a different model"}}')
+                return build_fallback_message("Model returned empty response")
             
             # Check for 404 / model not found errors
             if "404" in error_msg or "not_found" in error_msg or "model" in error_msg and "not found" in error_msg:

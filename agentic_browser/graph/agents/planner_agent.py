@@ -91,6 +91,24 @@ RULES:
     @property
     def system_prompt(self) -> str:
         return self.SYSTEM_PROMPT
+
+    def _empty_response_fallback(self, error: str | None = None) -> dict:
+        note = "Model returned empty response"
+        if error:
+            note = f"{note}: {error}"
+        return {
+            "goal_analysis": "Fallback plan due to empty response",
+            "steps": [
+                {
+                    "step": 1,
+                    "agent": "research",
+                    "action": "Clarify the goal and gather initial context",
+                    "success_criteria": "At least one relevant source or clarification captured",
+                }
+            ],
+            "estimated_agents": ["research"],
+            "constraints": {"note": note},
+        }
     
     def execute(self, state: AgentState) -> AgentState:
         """Create implementation plan for the goal.

@@ -84,6 +84,16 @@ Respond with JSON:
     @property
     def system_prompt(self) -> str:
         return self.SYSTEM_PROMPT
+
+    def _empty_response_fallback(self, error: str | None = None) -> dict:
+        summary = "Model returned empty response"
+        if error:
+            summary = f"{summary}: {error}"
+        return {
+            "action": "done",
+            "args": {"summary": summary},
+            "rationale": "Fallback response",
+        }
     
     def set_os_tools(self, os_tools) -> None:
         """Set OS tools after initialization."""
@@ -285,5 +295,4 @@ def code_agent_node(state: AgentState) -> AgentState:
     
     agent = CodeAgentNode(agent_config, os_tools)
     return agent.execute(state)
-
 

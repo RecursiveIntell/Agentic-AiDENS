@@ -5,6 +5,20 @@ Tests for JSON parsing functionality.
 import json
 import pytest
 
+from agentic_browser.config import AgentConfig
+from agentic_browser.graph.agents.automation_agent import AutomationAgentNode
+from agentic_browser.graph.agents.browser_agent import BrowserAgentNode
+from agentic_browser.graph.agents.code_agent import CodeAgentNode
+from agentic_browser.graph.agents.data_agent import DataAgentNode
+from agentic_browser.graph.agents.media_agent import MediaAgentNode
+from agentic_browser.graph.agents.network_agent import NetworkAgentNode
+from agentic_browser.graph.agents.os_agent import OSAgentNode
+from agentic_browser.graph.agents.package_agent import PackageAgentNode
+from agentic_browser.graph.agents.planner_agent import PlannerAgentNode
+from agentic_browser.graph.agents.research_agent import ResearchAgentNode
+from agentic_browser.graph.agents.retrospective_agent import RetrospectiveAgent
+from agentic_browser.graph.agents.sysadmin_agent import SysAdminAgentNode
+from agentic_browser.graph.agents.workflow_agent import WorkflowAgentNode
 from agentic_browser.llm_client import (
     parse_json_with_recovery,
     ActionResponse,
@@ -193,3 +207,154 @@ class TestRetryLogic:
         
         assert result is not None
         assert len(attempts) == 3
+
+
+@pytest.mark.parametrize(
+    "agent_cls,allowed_actions,expected_action",
+    [
+        (
+            BrowserAgentNode,
+            {"goto", "click", "type", "press", "scroll", "extract_visible_text", "download_image", "done", "back"},
+            "scroll",
+        ),
+        (
+            ResearchAgentNode,
+            {"goto", "click", "back", "extract_visible_text", "scroll", "done"},
+            "scroll",
+        ),
+        (
+            OSAgentNode,
+            {"os_exec", "os_list_dir", "os_read_file", "os_write_file", "done"},
+            "done",
+        ),
+        (
+            CodeAgentNode,
+            {"os_list_dir", "os_read_file", "os_exec", "done"},
+            "done",
+        ),
+        (
+            AutomationAgentNode,
+            {"notify_desktop", "delay", "at_schedule", "cron_show", "reminder_list", "countdown", "done"},
+            "done",
+        ),
+        (
+            DataAgentNode,
+            {
+                "state_to_file",
+                "json_to_csv",
+                "csv_to_json",
+                "json_query",
+                "csv_summary",
+                "text_search",
+                "text_stats",
+                "compress",
+                "extract",
+                "done",
+            },
+            "done",
+        ),
+        (
+            MediaAgentNode,
+            {
+                "ffmpeg_convert",
+                "ffmpeg_extract_audio",
+                "ffmpeg_trim",
+                "ffmpeg_info",
+                "image_resize",
+                "image_convert",
+                "image_compress",
+                "done",
+            },
+            "done",
+        ),
+        (
+            NetworkAgentNode,
+            {
+                "ping",
+                "dns_lookup",
+                "traceroute",
+                "port_check",
+                "netstat_listen",
+                "http_get",
+                "http_post",
+                "ssl_check",
+                "done",
+            },
+            "done",
+        ),
+        (
+            PackageAgentNode,
+            {
+                "venv_create",
+                "venv_info",
+                "pip_install",
+                "pip_list",
+                "pip_search",
+                "apt_search",
+                "git_clone",
+                "requirements_parse",
+                "done",
+            },
+            "done",
+        ),
+        (
+            SysAdminAgentNode,
+            {
+                "service_status",
+                "service_control",
+                "process_list",
+                "disk_usage",
+                "memory_usage",
+                "cpu_usage",
+                "journal_logs",
+                "uptime",
+                "done",
+            },
+            "done",
+        ),
+        (
+            WorkflowAgentNode,
+            {"trigger_webhook", "list_webhooks", "check_health", "done"},
+            "done",
+        ),
+    ],
+)
+def test_empty_response_fallback_action_schema(agent_cls, allowed_actions, expected_action):
+    config = AgentConfig(goal="test fallback")
+    agent = agent_cls(config)
+
+    payload = agent._empty_response_fallback("empty response")
+
+    assert isinstance(payload, dict)
+    assert payload.get("action") in allowed_actions
+    assert payload.get("action") == expected_action
+    assert isinstance(payload.get("args"), dict)
+
+    if expected_action == "scroll":
+        assert payload["args"].get("amount")
+    if expected_action == "done":
+        assert payload["args"].get("summary")
+
+
+def test_empty_response_fallback_planner_schema():
+    config = AgentConfig(goal="test fallback")
+    agent = PlannerAgentNode(config)
+
+    payload = agent._empty_response_fallback("empty response")
+
+    assert isinstance(payload, dict)
+    assert payload.get("goal_analysis")
+    assert isinstance(payload.get("steps"), list)
+    assert payload.get("estimated_agents")
+
+
+def test_empty_response_fallback_retrospective_schema():
+    config = AgentConfig(goal="test fallback")
+    agent = RetrospectiveAgent(config)
+
+    payload = agent._empty_response_fallback("empty response")
+
+    assert isinstance(payload, dict)
+    assert isinstance(payload.get("strategies"), list)
+    assert isinstance(payload.get("apocalypse"), list)
+    assert payload.get("summary")

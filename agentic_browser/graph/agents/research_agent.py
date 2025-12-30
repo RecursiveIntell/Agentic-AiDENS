@@ -135,6 +135,16 @@ Respond with JSON:
     @property
     def system_prompt(self) -> str:
         return self.SYSTEM_PROMPT
+
+    def _empty_response_fallback(self, error: str | None = None) -> dict:
+        summary = "Model returned empty response"
+        if error:
+            summary = f"{summary}: {error}"
+        return {
+            "action": "scroll",
+            "args": {"amount": 500},
+            "rationale": summary,
+        }
     
     def set_browser_tools(self, browser_tools) -> None:
         """Set browser tools after initialization."""
@@ -933,5 +943,4 @@ def research_agent_node(state: AgentState) -> AgentState:
     
     agent = ResearchAgentNode(agent_config, browser_tools, recall_tool)
     return agent.execute(state)
-
 

@@ -15,6 +15,16 @@ class RetrospectiveAgent(BaseAgent):
     def system_prompt(self) -> str:
         return "You are the Retrospective Agent. Your goal is to analyze session history and extract strategies and mistakes."
 
+    def _empty_response_fallback(self, error: str | None = None) -> dict:
+        summary = "Model returned empty response"
+        if error:
+            summary = f"{summary}: {error}"
+        return {
+            "strategies": [],
+            "apocalypse": [],
+            "summary": summary,
+        }
+
     def execute(self, state: AgentState) -> AgentState:
         """Analyze the ENTIRE session execution and update learning log."""
         
