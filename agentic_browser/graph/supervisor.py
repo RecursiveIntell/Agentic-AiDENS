@@ -736,7 +736,14 @@ def supervisor_node(state: AgentState) -> AgentState:
         agent_config = tools.config
     else:
         # Fallback: create default config
-        agent_config = AgentConfig()
+        goal = state.get("goal", "")
+        agent_config = AgentConfig(goal=goal)
+        if not agent_config.model or not agent_config.model_endpoint:
+            agent_config = AgentConfig.from_cli_args(
+                goal=goal,
+                model=agent_config.model,
+                model_endpoint=agent_config.model_endpoint,
+            )
     
     supervisor = Supervisor(agent_config)
     return supervisor.route(state)
