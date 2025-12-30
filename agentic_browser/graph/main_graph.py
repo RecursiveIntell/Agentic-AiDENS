@@ -362,11 +362,11 @@ class MultiAgentRunner:
         except Exception as e:
             error_msg = str(e).lower()
             if self.session_store:
-                 # Update session with error
-                 try:
-                     self.session_store.update_session(self.session_id, {"error": str(e), "task_complete": True})
-                 except:
-                     pass
+                # Update session with error
+                try:
+                    self.session_store.update_session(self.session_id, {"error": str(e), "task_complete": True})
+                except Exception:
+                    pass
             
 
 
@@ -520,4 +520,3 @@ class MultiAgentRunner:
         
         return "No result (task may not have completed)"
     
-
