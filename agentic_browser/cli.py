@@ -279,6 +279,7 @@ def run_command(args: argparse.Namespace) -> int:
         enable_tracing=args.enable_tracing,
         gui_ipc=args.gui_ipc,
         browser_fast_mode=getattr(args, 'fast', False),
+        no_memory=args.no_memory,
     )
     
     # Store explain mode in config for agents to use
