@@ -173,6 +173,10 @@ class SettingsStore:
                     n8n_url=data.get("n8n_url"),
                     n8n_api_key=data.get("n8n_api_key"),
                     n8n_webhooks=data.get("n8n_webhooks", {}),
+                    # LangSmith tracing settings
+                    langsmith_enabled=data.get("langsmith_enabled", False),
+                    langsmith_api_key=data.get("langsmith_api_key"),
+                    langsmith_project=data.get("langsmith_project", "agentic-browser"),
                     # Other settings
                     profile_name=data.get("profile_name", "default"),
                     headless=data.get("headless", False),
@@ -212,6 +216,10 @@ class SettingsStore:
             "n8n_url": self._settings.n8n_url,
             "n8n_api_key": self._settings.n8n_api_key,
             "n8n_webhooks": self._settings.n8n_webhooks,
+            # LangSmith tracing settings
+            "langsmith_enabled": self._settings.langsmith_enabled,
+            "langsmith_api_key": self._settings.langsmith_api_key,
+            "langsmith_project": self._settings.langsmith_project,
             # Other settings
             "profile_name": self._settings.profile_name,
             "headless": self._settings.headless,
