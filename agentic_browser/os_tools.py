@@ -792,7 +792,13 @@ class OSTools:
             Risk level: "low", "medium", or "high"
         """
         if action == "os_exec":
-            cmd = args.get("cmd", "")
+            cmd = args.get("cmd") or ""
+            argv = args.get("argv")
+            if not cmd and argv:
+                if isinstance(argv, (list, tuple)):
+                    cmd = " ".join(str(item) for item in argv)
+                else:
+                    cmd = str(argv)
             
             # Check high-risk patterns
             for pattern in self.HIGH_RISK_PATTERNS:
