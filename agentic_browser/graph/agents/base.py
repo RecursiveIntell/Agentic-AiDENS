@@ -920,10 +920,10 @@ Output the compressed context ONLY, no preamble."""
             updates["extracted_data"] = merged
         
         if visited_url:
-            updates["visited_urls"] = [visited_url]
+            updates["visited_urls"] = [*state["visited_urls"], visited_url]
         
         if file_accessed:
-            updates["files_accessed"] = [file_accessed]
+            updates["files_accessed"] = [*state["files_accessed"], file_accessed]
         
         if error:
             updates["error"] = error

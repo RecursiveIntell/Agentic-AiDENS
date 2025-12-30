@@ -226,6 +226,50 @@ class TestAdditionalContextPersistence:
         assert state_dict["additional_context"] == "Context from last iteration"
 
 
+class TestUpdateStateVisitedUrls:
+    """Tests for BaseAgent._update_state list appending."""
+
+    def test_update_state_appends_urls_and_files(self):
+        """Ensure visited URLs and files are appended across updates."""
+        from agentic_browser.config import AgentConfig
+        from agentic_browser.graph.agents.base import BaseAgent
+        from agentic_browser.graph.state import create_initial_state
+
+        class DummyAgent(BaseAgent):
+            AGENT_NAME = "dummy"
+
+            @property
+            def system_prompt(self) -> str:
+                return ""
+
+            def execute(self, state):
+                return state
+
+        with patch("agentic_browser.graph.agents.base.create_llm_client", return_value=MagicMock()):
+            agent = DummyAgent(AgentConfig(goal="test"))
+
+        state = create_initial_state("test goal")
+        first_state = agent._update_state(
+            state,
+            visited_url="https://example.com/first",
+            file_accessed="/tmp/first.txt",
+        )
+        second_state = agent._update_state(
+            first_state,
+            visited_url="https://example.com/second",
+            file_accessed="/tmp/second.txt",
+        )
+
+        assert second_state["visited_urls"] == [
+            "https://example.com/first",
+            "https://example.com/second",
+        ]
+        assert second_state["files_accessed"] == [
+            "/tmp/first.txt",
+            "/tmp/second.txt",
+        ]
+
+
 class TestRecallRunDetails:
     """Tests for recall run details lookup."""
 
