@@ -270,7 +270,11 @@ When completing, synthesize ALL gathered data into a useful report:
             logger.debug(response.content[:1000] if len(response.content) > 1000 else response.content)
             print(f"{'='*60}\n")
             
-            decision = self._parse_decision(response.content, state.get("current_domain", "research"))
+            decision = self._parse_decision(
+                response.content,
+                state.get("current_domain", "research"),
+                state.get("goal", ""),
+            )
             
             # Update token usage
             token_usage = self.update_token_usage(state, response)
@@ -580,12 +584,13 @@ If all steps are complete, synthesize and return done.
             formatted.append(f"- {type(msg).__name__}: {content}")
         return "\n".join(formatted) or "(no messages)"
     
-    def _parse_decision(self, response: str, current_domain: str = "research") -> dict:
+    def _parse_decision(self, response: str, current_domain: str = "research", goal: str = "") -> dict:
         """Parse supervisor decision from response.
         
         Args:
             response: LLM response to parse
             current_domain: Current active domain to fallback to on parse failure
+            goal: User goal for safer fallback routing
         """
         try:
             content = response.strip()
@@ -598,12 +603,16 @@ If all steps are complete, synthesize and return done.
                 content = content[start:end+1]
             return json.loads(content)
         except json.JSONDecodeError:
-            # Smarter fallback - check goal context for image tasks
-            logger.debug(f"Supervisor - JSON parse failed, checking goal context")
-            
-            # Note: current_domain is passed as arg, but we need goal from somewhere
-            # For now, prefer browser for parse failures as it's the safest fallback
-            return {"route_to": "browser", "rationale": "Parse failed, defaulting to browser"}
+            logger.debug("Supervisor - JSON parse failed, falling back to current domain")
+            fallback_domain = (
+                self._refine_initial_domain(current_domain, goal)
+                if goal
+                else current_domain
+            )
+            return {
+                "route_to": fallback_domain,
+                "rationale": f"Parse failed, defaulting to {fallback_domain}",
+            }
     
     def _map_domain(self, domain: str) -> str:
         """Map DomainRouter domain to agent names."""
