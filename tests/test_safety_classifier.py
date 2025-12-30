@@ -9,6 +9,7 @@ from agentic_browser.safety import (
     RiskLevel,
     classify_risk,
 )
+from agentic_browser.graph.safety import GraphSafetyChecker
 from agentic_browser.utils import (
     contains_high_risk_keywords,
     contains_medium_risk_keywords,
@@ -277,3 +278,44 @@ class TestConvenienceFunction:
             {"url": "https://example.com"},
         )
         assert risk == RiskLevel.LOW
+
+
+class TestGraphSafetyChecker:
+    """Tests for GraphSafetyChecker.check_action."""
+
+    @pytest.fixture
+    def checker(self):
+        """Create a GraphSafetyChecker instance."""
+        return GraphSafetyChecker()
+
+    def test_check_action_high_risk_requires_approval(self, checker):
+        """Test high-risk actions require approval."""
+        risk_level, reason, requires_approval = checker.check_action(
+            "click",
+            {"selector": 'button:text("Buy Now")'},
+            current_url="https://store.com",
+        )
+        assert risk_level == RiskLevel.HIGH
+        assert requires_approval is True
+        assert "high" in reason.lower()
+
+    def test_check_action_low_risk_no_approval(self, checker):
+        """Test low-risk actions do not require approval."""
+        risk_level, reason, requires_approval = checker.check_action(
+            "goto",
+            {"url": "https://example.com"},
+            current_url="https://example.com",
+        )
+        assert risk_level == RiskLevel.LOW
+        assert requires_approval is False
+        assert "low" in reason.lower()
+
+    def test_check_action_uses_page_content(self, checker):
+        """Test page content is used in risk classification."""
+        risk_level, _, _ = checker.check_action(
+            "click",
+            {"selector": 'input[type="submit"]'},
+            current_url="https://example.com/contact",
+            page_content="Complete Purchase now",
+        )
+        assert risk_level == RiskLevel.HIGH

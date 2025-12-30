@@ -27,6 +27,8 @@ class GraphSafetyChecker:
         action: str, 
         args: dict, 
         domain: str = "browser",
+        current_url: str = "",
+        page_content: str = "",
     ) -> tuple[RiskLevel, str, bool]:
         """Check an action for safety.
         
@@ -34,17 +36,32 @@ class GraphSafetyChecker:
             action: Action name (goto, click, os_exec, etc.)
             args: Action arguments
             domain: Current domain (browser, os)
+            current_url: Current page URL (for browser actions)
+            page_content: Current page visible text (optional)
             
         Returns:
             Tuple of (risk_level, reason, requires_approval)
         """
-        result = self.classifier.classify(action, args)
+        risk_level = self.classifier.classify_action(
+            action,
+            args,
+            current_url=current_url,
+            page_content=page_content,
+        )
+        reason = self._build_reason(action, risk_level, domain)
         
         # HIGH risk always requires approval
         # MEDIUM risk requires approval unless auto-approved
-        requires_approval = result.risk_level in (RiskLevel.HIGH, RiskLevel.MEDIUM)
+        requires_approval = risk_level in (RiskLevel.HIGH, RiskLevel.MEDIUM)
         
-        return result.risk_level, result.reason, requires_approval
+        return risk_level, reason, requires_approval
+
+    @staticmethod
+    def _build_reason(action: str, risk_level: RiskLevel, domain: str) -> str:
+        """Build a simple rationale string for the risk decision."""
+        return (
+            f"Classified {action} in {domain} domain as {risk_level.value} risk."
+        )
     
     def requires_double_confirm(self, action: str, args: dict) -> bool:
         """Check if action requires double confirmation.
