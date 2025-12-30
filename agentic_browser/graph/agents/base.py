@@ -4,10 +4,11 @@ Base agent class for specialized agent nodes.
 Provides common functionality for all agent types.
 """
 
+import asyncio
 import logging
 from abc import ABC, abstractmethod
-from typing import Any
-import asyncio
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from typing import Any, Awaitable
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
 from langchain_openai import ChatOpenAI
@@ -37,6 +38,14 @@ from ...config import AgentConfig
 # Configure debug logging
 logger = logging.getLogger("agentic_browser.agents")
 DEBUG_MODE = True  # Set to False in production
+
+
+class LLMTimeoutError(TimeoutError):
+    """Raised when an LLM invocation exceeds the configured timeout."""
+
+
+class LLMInvocationError(RuntimeError):
+    """Raised when an LLM invocation fails for reasons other than timeout."""
 
 
 def create_llm_client(config: AgentConfig, max_tokens: int = 1000):
@@ -172,13 +181,34 @@ class BaseAgent(ABC):
             print(f"[AGENT] Async LLM invocation failed: {e}")
             return self.llm.invoke(messages)
     
-    def invoke_llm_with_timeout(self, messages: list, timeout_s: float = 60.0) -> Any:
-        """Invoke LLM with timeout protection (Phase 7)."""
+    async def _invoke_llm_with_timeout_async(self, messages: list, timeout_s: float) -> Any:
+        """Invoke LLM asynchronously with timeout protection."""
+        try:
+            return await asyncio.wait_for(self._invoke_llm_async(messages), timeout=timeout_s)
+        except asyncio.TimeoutError as exc:
+            raise LLMTimeoutError(f"LLM call exceeded {timeout_s:.2f}s timeout") from exc
+        except Exception as exc:
+            raise LLMInvocationError("LLM invocation failed") from exc
+
+    def invoke_llm_with_timeout(self, messages: list, timeout_s: float = 60.0) -> Any | Awaitable[Any]:
+        """Invoke LLM with timeout protection (Phase 7).
+
+        Returns an awaitable when called from within a running event loop.
+        In synchronous contexts, blocks until completion or timeout.
+        """
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            return self.llm.invoke(messages)
-        return self.llm.invoke(messages)
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(self.llm.invoke, messages)
+                try:
+                    return future.result(timeout=timeout_s)
+                except FuturesTimeoutError as exc:
+                    future.cancel()
+                    raise LLMTimeoutError(f"LLM call exceeded {timeout_s:.2f}s timeout") from exc
+                except Exception as exc:
+                    raise LLMInvocationError("LLM invocation failed") from exc
+        return self._invoke_llm_with_timeout_async(messages, timeout_s)
     
     def update_token_usage(self, state: AgentState, response: AIMessage) -> dict:
         """Calculate and return updated token usage stats.
