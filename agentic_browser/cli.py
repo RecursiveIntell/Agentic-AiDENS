@@ -511,20 +511,27 @@ def run_graph_command(args: argparse.Namespace, config: AgentConfig, console: Co
             # Inject the specific error into state
             final_state["error"] = str(e)
             _run_retrospective_on_abort(final_state, config, console)
-            
-        if json_mode:
-            import json
-            print(json.dumps({"success": False, "error": str(e)}))
-            return 1
-
+        
         # Handle empty model response errors with helpful message
         empty_patterns = ["empty", "must contain", "output text", "tool calls", "cannot both be empty"]
         if any(p in error_msg for p in empty_patterns):
+            if json_mode:
+                import json
+                message = (
+                    "Model returned empty response - please try a different model or restart LM Studio"
+                )
+                print(json.dumps({"success": False, "error": message}))
+                return 1
             console.print("\n[red bold]⚠️ Model returned empty response[/red bold]")
             console.print("[yellow]This usually means:[/yellow]")
             console.print("  • LM Studio needs to be restarted")
             console.print("  • The model is too small or incompatible")
             console.print("  • Try a different model (e.g., mistral-7b-instruct)")
+            return 1
+        
+        if json_mode:
+            import json
+            print(json.dumps({"success": False, "error": str(e)}))
             return 1
         
         console.print(f"\n[red]Graph execution error: {e}[/red]")
@@ -542,24 +549,21 @@ def run_graph_command(args: argparse.Namespace, config: AgentConfig, console: Co
 
 def _run_retrospective_on_abort(state: dict, config: AgentConfig, console: Console):
     """Run retrospective analysis when user aborts."""
-    try:
-        console.print("\n[bold yellow]⚠️  Run Aborted! Running Retrospective Learning...[/bold yellow]")
+    console.print("\n[bold yellow]⚠️  Run Aborted! Running Retrospective Learning...[/bold yellow]")
+    
+    from .graph.agents.retrospective_agent import RetrospectiveAgent
+    
+    # Inject aborted flag
+    state["was_aborted"] = True
+    
+    # Ensure minimal fields exist
+    if "messages" not in state:
+        state["messages"] = []
         
-        from .graph.agents.retrospective_agent import RetrospectiveAgent
-        
-        # Inject aborted flag
-        state["was_aborted"] = True
-        
-        # Ensure minimal fields exist
-        if "messages" not in state:
-            state["messages"] = []
-            
-        agent = RetrospectiveAgent(config)
-        agent.execute(state)
-        
-        console.print("[green]✓ Retrospective captured.[/green]")
-    except Exception as e:
-        console.print(f"[dim]Failed to run retrospective: {e}[/dim]")
+    agent = RetrospectiveAgent(config)
+    agent.execute(state)
+    
+    console.print("[green]✓ Retrospective captured.[/green]")
 
 
 def gui_command() -> int:
