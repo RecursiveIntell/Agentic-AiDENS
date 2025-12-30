@@ -178,13 +178,6 @@ Examples:
     )
     
     run_parser.add_argument(
-        "--explain",
-        action="store_true",
-        default=False,
-        help="Show decision rationale for each action (without full chain-of-thought)",
-    )
-    
-    run_parser.add_argument(
         "--json",
         action="store_true",
         default=False,
@@ -280,9 +273,6 @@ def run_command(args: argparse.Namespace) -> int:
         gui_ipc=args.gui_ipc,
         browser_fast_mode=getattr(args, 'fast', False),
     )
-    
-    # Store explain mode in config for agents to use
-    config.explain_mode = getattr(args, 'explain', False)
     
     # Set vision mode if explicitly requested
     if getattr(args, 'vision', False):
