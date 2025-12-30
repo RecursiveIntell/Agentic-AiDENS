@@ -5,7 +5,6 @@ Defines the shared state passed between all agent nodes.
 """
 
 import logging
-import operator
 from typing import Annotated, Any, Sequence, TypedDict
 
 from langchain_core.messages import BaseMessage
@@ -44,6 +43,18 @@ def bounded_url_reducer(existing: list[str], new: list[str]) -> list[str]:
     return combined
 
 
+def bounded_files_reducer(existing: list[str], new: list[str]) -> list[str]:
+    """Combine file paths with bounded size and deduplication.
+    
+    Keeps last 50 unique file paths to prevent unbounded growth.
+    """
+    MAX_FILES = 50
+    combined = list(dict.fromkeys(existing + new))
+    if len(combined) > MAX_FILES:
+        return combined[-MAX_FILES:]
+    return combined
+
+
 class AgentState(TypedDict):
     """Shared state for multi-agent graph.
     
@@ -68,7 +79,7 @@ class AgentState(TypedDict):
     # Collected data
     extracted_data: dict[str, Any]
     visited_urls: Annotated[list[str], bounded_url_reducer]  # Bounded to 50 URLs
-    files_accessed: Annotated[list[str], operator.add]
+    files_accessed: Annotated[list[str], bounded_files_reducer]
 
     # Error tracking
     error: str | None
@@ -180,4 +191,3 @@ def create_initial_state(
         browser_same_page_actions=0,
         browser_last_page_base="",
     )
-
