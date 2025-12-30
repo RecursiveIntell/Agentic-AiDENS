@@ -172,3 +172,26 @@ class TestDomainRouterActionClassification:
         assert not DomainRouter.is_browser_action("unknown_action")
         assert not DomainRouter.is_os_action("unknown_action")
         assert not DomainRouter.is_memory_action("unknown_action")
+
+
+class TestDomainRouterLLMRouting:
+    """Tests for LLM routing when heuristic confidence is low."""
+
+    def test_llm_routing_attempted_on_low_confidence(self):
+        """Ensure LLM routing is attempted for ambiguous goals."""
+        class DummyLLMClient:
+            def __init__(self):
+                self.called = False
+
+            def chat_completion(self, messages, max_retries=1):
+                self.called = True
+                return '{"domain": "os", "confidence": 0.9, "reason": "needs local files"}'
+
+        llm_client = DummyLLMClient()
+        router = DomainRouter(llm_client=llm_client)
+
+        decision = router.route("help me with this task", mode="auto")
+
+        assert llm_client.called is True
+        assert decision.domain == "os"
+        assert decision.confidence == 0.9

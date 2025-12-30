@@ -9,7 +9,6 @@ import logging
 from typing import Literal
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 
 from .state import AgentState
 from ..domain_router import DomainRouter
@@ -17,6 +16,56 @@ from ..config import AgentConfig
 from ..cost import calculate_cost
 
 logger = logging.getLogger("agentic_browser.supervisor")
+
+
+class RouterLLMClient:
+    """Adapter for LangChain LLMs to DomainRouter interface."""
+
+    def __init__(self, llm):
+        self.llm = llm
+
+    def chat_completion(self, messages: list, max_retries: int = 1) -> str:
+        """Invoke LLM and return plain string content."""
+        normalized_messages = self._normalize_messages(messages)
+        attempts = max(1, max_retries + 1)
+        last_error = None
+
+        for _ in range(attempts):
+            try:
+                response = self.llm.invoke(normalized_messages)
+                return self._response_to_text(response)
+            except Exception as error:
+                last_error = error
+
+        raise last_error
+
+    def _normalize_messages(self, messages: list) -> list:
+        if not messages:
+            return messages
+
+        if isinstance(messages[0], dict):
+            normalized = []
+            for message in messages:
+                role = message.get("role", "user")
+                content = message.get("content", "")
+                if role == "system":
+                    normalized.append(SystemMessage(content=content))
+                elif role == "assistant":
+                    normalized.append(AIMessage(content=content))
+                else:
+                    normalized.append(HumanMessage(content=content))
+            return normalized
+
+        return messages
+
+    @staticmethod
+    def _response_to_text(response) -> str:
+        if isinstance(response, str):
+            return response
+        content = getattr(response, "content", None)
+        if content is None:
+            return str(response)
+        return content
 
 
 class Supervisor:
@@ -105,7 +154,7 @@ When completing, synthesize ALL gathered data into a useful report:
         # Use factory function to create provider-appropriate LLM client
         from .agents.base import create_llm_client
         self.llm = create_llm_client(config, max_tokens=500)
-        self.domain_router = DomainRouter(config)
+        self.domain_router = DomainRouter(llm_client=RouterLLMClient(self.llm))
     
     def safe_invoke(self, messages: list) -> AIMessage:
         """Invoke LLM with fallback handling for 404 errors and empty responses.
