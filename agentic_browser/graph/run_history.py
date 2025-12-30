@@ -152,9 +152,8 @@ class RecallTool:
         except Exception as e:
             return ToolResult(success=False, message=f"Error searching runs: {e}")
 
-    def _get_run_details(self, args: dict[str, Any]) -> ToolResult:
+    def get_run_details(self, run_id: str) -> ToolResult:
         """Get detailed steps for a specific run."""
-        run_id = args.get("run_id")
         if not run_id:
             return ToolResult(success=False, message="Missing required argument: run_id")
             

@@ -224,3 +224,33 @@ class TestAdditionalContextPersistence:
         
         state_dict = state.to_dict()
         assert state_dict["additional_context"] == "Context from last iteration"
+
+
+class TestRecallRunDetails:
+    """Tests for recall run details lookup."""
+
+    def test_get_run_details_returns_session_and_steps(self, tmp_path):
+        """Ensure get_run_details returns session details without AttributeError."""
+        from agentic_browser.graph.memory import SessionStore
+        from agentic_browser.graph.run_history import RecallTool
+
+        db_path = tmp_path / "sessions.db"
+        store = SessionStore(db_path=db_path)
+        session_id = "run-1"
+
+        store.create_session(session_id=session_id, goal="Test goal", state={"task_complete": True})
+        store.add_step(
+            session_id=session_id,
+            step_number=1,
+            agent="tester",
+            action="think",
+            args={"note": "hello"},
+            result="ok",
+        )
+
+        recall = RecallTool(session_store=store)
+        result = recall.get_run_details(session_id)
+
+        assert result.success is True
+        assert result.data["session"]["id"] == session_id
+        assert result.data["steps"][0]["step_number"] == 1
