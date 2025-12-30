@@ -201,23 +201,27 @@ class AgentConfig:
         gui_ipc: bool = False,
         browser_fast_mode: bool = False,
         no_memory: bool = False,
+        debug: Optional[bool] = None,
     ) -> "AgentConfig":
         """Create configuration from CLI arguments."""
-        return cls(
-            goal=goal,
-            profile_name=profile,
-            fresh_profile=fresh_profile,
-            no_persist=no_persist,
-            headless=headless,
-            max_steps=max_steps,
-            model_endpoint=model_endpoint or DEFAULTS["model_endpoint"],
-            model=model or DEFAULTS["model"],
-            auto_approve=auto_approve,
-            enable_tracing=enable_tracing,
-            gui_ipc=gui_ipc,
-            browser_fast_mode=browser_fast_mode,
-            no_memory=no_memory,
-        )
+        kwargs = {
+            "goal": goal,
+            "profile_name": profile,
+            "fresh_profile": fresh_profile,
+            "no_persist": no_persist,
+            "headless": headless,
+            "max_steps": max_steps,
+            "model_endpoint": model_endpoint or DEFAULTS["model_endpoint"],
+            "model": model or DEFAULTS["model"],
+            "auto_approve": auto_approve,
+            "enable_tracing": enable_tracing,
+            "gui_ipc": gui_ipc,
+            "browser_fast_mode": browser_fast_mode,
+            "no_memory": no_memory,
+        }
+        if debug is not None:
+            kwargs["debug"] = debug
+        return cls(**kwargs)
 
 
 # Default configuration values for documentation

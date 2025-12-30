@@ -12,6 +12,7 @@ from rich.console import Console
 
 from . import __version__
 from .config import AgentConfig, DEFAULTS
+from .logging_config import setup_logging
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -279,7 +280,10 @@ def run_command(args: argparse.Namespace) -> int:
         enable_tracing=args.enable_tracing,
         gui_ipc=args.gui_ipc,
         browser_fast_mode=getattr(args, 'fast', False),
+        debug=True if getattr(args, 'debug', False) else None,
     )
+
+    setup_logging(debug=config.debug)
     
     # Store explain mode in config for agents to use
     config.explain_mode = getattr(args, 'explain', False)

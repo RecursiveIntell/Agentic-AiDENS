@@ -34,10 +34,6 @@ def _get_google_client():
 from ..state import AgentState
 from ...config import AgentConfig
 
-# Configure debug logging
-logger = logging.getLogger("agentic_browser.agents")
-DEBUG_MODE = True  # Set to False in production
-
 
 def create_llm_client(config: AgentConfig, max_tokens: int = 1000):
     """Create the appropriate LangChain LLM client based on provider detection.
@@ -169,7 +165,7 @@ class BaseAgent(ABC):
             # All LangChain LLMs support ainvoke
             return await self.llm.ainvoke(messages)
         except Exception as e:
-            print(f"[AGENT] Async LLM invocation failed: {e}")
+            logger.debug("Async LLM invocation failed: %s", e)
             return self.llm.invoke(messages)
     
     def invoke_llm_with_timeout(self, messages: list, timeout_s: float = 60.0) -> Any:

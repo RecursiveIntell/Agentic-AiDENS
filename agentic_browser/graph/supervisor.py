@@ -121,7 +121,7 @@ When completing, synthesize ALL gathered data into a useful report:
             
             # Handle empty responses
             if response is None or (hasattr(response, 'content') and not response.content):
-                print("[WARN] Supervisor LLM returned empty response, providing fallback")
+                logger.debug("Supervisor LLM returned empty response, providing fallback")
                 return AIMessage(content='{"route_to": "done", "rationale": "Model returned empty response", "final_answer": "Unable to complete - model returned empty response"}')
             
             return response
@@ -132,13 +132,13 @@ When completing, synthesize ALL gathered data into a useful report:
             # Handle empty response errors from provider - catch all variations
             empty_patterns = ["empty", "must contain", "output text", "tool calls", "cannot both be empty"]
             if any(p in error_msg for p in empty_patterns):
-                print(f"[WARN] Empty/invalid response error: {e}")
+                logger.debug("Empty/invalid response error: %s", e)
                 return AIMessage(content='{"route_to": "done", "rationale": "Model error", "final_answer": "Model returned empty response - please try a different model"}')
             
             # Check for 404 / model not found errors
             if "404" in error_msg or "not_found" in error_msg or "model" in error_msg and "not found" in error_msg:
-                print(f"[WARN] detailed error: {str(e)}")
-                print(f"[WARN] Model {self.config.model} not found. Attempting fallback...")
+                logger.debug("Detailed error: %s", e)
+                logger.debug("Model %s not found. Attempting fallback...", self.config.model)
                 
                 # Determine fallback model based on current provider/model
                 fallback_model = None
@@ -157,7 +157,7 @@ When completing, synthesize ALL gathered data into a useful report:
                     fallback_model = "gemini-1.5-flash"
                 
                 if fallback_model and fallback_model != self.config.model:
-                    print(f"[INFO] Switching to fallback model: {fallback_model}")
+                    logger.debug("Switching to fallback model: %s", fallback_model)
                     
                     # Update config and re-initialize LLM
                     from .agents.base import create_llm_client
@@ -168,11 +168,11 @@ When completing, synthesize ALL gathered data into a useful report:
                     try:
                         return self.llm.invoke(messages)
                     except Exception as retry_err:
-                        print(f"[WARN] Retry also failed: {retry_err}")
+                        logger.debug("Retry also failed: %s", retry_err)
                         return AIMessage(content='{"route_to": "done", "final_answer": "Model error during retry - please try again"}')
             
             # Catch-all: return a fallback response instead of crashing
-            print(f"[WARN] Unhandled LLM error, returning fallback: {e}")
+            logger.debug("Unhandled LLM error, returning fallback: %s", e)
             return AIMessage(content='{"route_to": "done", "rationale": "LLM error", "final_answer": "An error occurred with the model. Please try again."}')
             
     def update_token_usage(self, state: AgentState, response: AIMessage) -> dict:
