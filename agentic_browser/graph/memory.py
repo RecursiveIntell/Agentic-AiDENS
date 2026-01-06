@@ -576,7 +576,7 @@ class SessionStore:
         """, (session_id, step_number, agent, action, args_json, result, now))
         conn.commit()
 
-    def search_sessions(self, query: str, limit: int = 5) -> list[dict]:
+    def search_sessions(self, query: str, limit: int = 5, success_only: bool = True) -> list[dict]:
         """Hybrid semantic + keyword search for sessions."""
         conn = self._get_conn()
         
@@ -587,8 +587,11 @@ class SessionStore:
                 import numpy as np
                 query_embedding = model.encode(query)
                 
-                # Fetch all sessions with embeddings
-                rows = conn.execute("SELECT id, goal, status, created_at, final_answer, embedding FROM sessions WHERE embedding IS NOT NULL").fetchall()
+                # Fetch sessions with embeddings
+                if success_only:
+                    rows = conn.execute("SELECT id, goal, status, created_at, final_answer, embedding FROM sessions WHERE embedding IS NOT NULL AND status = 'success'").fetchall()
+                else:
+                    rows = conn.execute("SELECT id, goal, status, created_at, final_answer, embedding FROM sessions WHERE embedding IS NOT NULL").fetchall()
                 
                 scored_results = []
                 for row in rows:
@@ -614,13 +617,22 @@ class SessionStore:
             print(f"Semantic search failed, falling back to keyword: {e}")
             
         # 2. Fallback to Keyword Search
-        sql = """
-            SELECT id, goal, status, created_at, final_answer
-            FROM sessions
-            WHERE (goal LIKE ? OR final_answer LIKE ?)
-            ORDER BY created_at DESC
-            LIMIT ?
-        """
+        if success_only:
+            sql = """
+                SELECT id, goal, status, created_at, final_answer
+                FROM sessions
+                WHERE (goal LIKE ? OR final_answer LIKE ?) AND status = 'success'
+                ORDER BY created_at DESC
+                LIMIT ?
+            """
+        else:
+            sql = """
+                SELECT id, goal, status, created_at, final_answer
+                FROM sessions
+                WHERE (goal LIKE ? OR final_answer LIKE ?)
+                ORDER BY created_at DESC
+                LIMIT ?
+            """
         wildcard = f"%{query}%"
         rows = conn.execute(sql, (wildcard, wildcard, limit)).fetchall()
         return [dict(row) for row in rows]
