@@ -108,18 +108,14 @@ class RecallTool:
         """Search for past runs matching a query."""
         if not query:
             return ToolResult(success=False, message="Missing required argument: query")
-
-        # TODO: Implement success_only filtering in SQL in future, for now client-side
         
         try:
-            sessions = self.session_store.search_sessions(query, limit=limit * 2) # Fetch more to filter
+            # Pass success_only to SQL level
+            sessions = self.session_store.search_sessions(query, limit=limit, success_only=success_only)
             
-            # Filter and format
+            # Format results
             results = []
             for s in sessions:
-                if success_only and s.get("status") != "success":
-                    continue
-                    
                 results.append({
                     "id": s["id"],
                     "goal": s["goal"],
@@ -127,9 +123,6 @@ class RecallTool:
                     "date": s["created_at"],
                     "final_answer": (s.get("final_answer") or "")[:200] + "..." 
                 })
-                
-                if len(results) >= limit:
-                    break
             
             if not results:
                 return ToolResult(
